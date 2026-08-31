@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 (2026-08-31)
+
+### Bug Fixes
+
+- align Hoostack policy and release supply chain (#3) (26f701d)
+- **release:** honor protected main branch (f3650c9)
+
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and Semantic Versioning.
 
