@@ -6,7 +6,9 @@ packages:
     path: .
     type: version-file
     manifest: VERSION
+    changelog: CHANGELOG.md
 hooks:
-  afterVersion: []
+  afterVersion:
+    - go run ./scripts/sync_release_version.go
 github:
   releases: true

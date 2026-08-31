@@ -54,5 +54,25 @@ rules:
       registries: [docker.io, ghcr.io, gcr.io, mcr.microsoft.com, quay.io]
       npm: [https://registry.npmjs.org]
       nuget: [https://api.nuget.org/v3/index.json]
-      requireDigest: false
+      requireDigest: true
       message: Artifact source is outside approved supply chain
+  - id: supply-chain.exception-lifecycle
+    title: Security exceptions are owned, justified, ticketed, and short-lived
+    description: Validates structured vulnerability exception records.
+    rationale: Temporary risk decisions need explicit ownership and expiry.
+    remediation: Add owner, HTTPS ticket, rationale, creation date, and expiry within 90 days.
+    severity: error
+    kind: exceptions.lifecycle
+    files: [.trivyignore.yaml]
+    spec:
+      format: yaml
+      collection: vulnerabilities
+      idField: id
+      reasonField: statement
+      ownerField: owner
+      ticketField: ticket
+      createdField: created_at
+      expiresField: expired_at
+      required: [id, reason, owner, ticket, created, expires]
+      maximumDays: 90
+      message: Security exception violates lifecycle policy

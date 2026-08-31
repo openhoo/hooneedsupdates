@@ -1,0 +1,96 @@
+name: Version
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview Hooversion without release commits, tags, or publication
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  HOOVERSION_VERSION: 1.0.6
+
+jobs:
+  release:
+    name: Hooversion release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        !startsWith(github.event.workflow_run.head_commit.message, 'chore(release):')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      current: ${{ steps.current.outputs.current || steps.manual.outputs.current }}
+      published: ${{ steps.release.outputs.published }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Verify release run matches current main
+        id: current
+        if: github.event_name == 'workflow_run'
+        env:
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale release run for $EXPECTED_SHA."
+          fi
+
+      - name: Mark manual release current
+        id: manual
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "current=true" >> "$GITHUB_OUTPUT"
+
+      - name: Release
+        id: release
+        if: steps.current.outputs.current == 'true' || steps.manual.outputs.current == 'true'
+        uses: openhoo/hooversion/actions/release@528576f6fbc6136ec5f76ac53bf81d3e04aca4b3 # v1.0.6
+        with:
+          version: ${{ env.HOOVERSION_VERSION }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
+  publish:
+    name: Queue signed publication
+    needs: release
+    if: needs.release.outputs.current == 'true' && needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: >-
+          gh workflow run release.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref "$RELEASE_TAG"
+          --field tag="$RELEASE_TAG"
