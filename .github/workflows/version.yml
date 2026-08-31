@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  HOOVERSION_VERSION: 1.0.6
+  HOOVERSION_VERSION: 1.0.7
 
 jobs:
   release:
@@ -31,16 +31,15 @@ jobs:
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.head_repository.full_name == github.repository &&
-        !startsWith(github.event.workflow_run.head_commit.message, 'chore(release):')
+        github.event.workflow_run.head_repository.full_name == github.repository
       )
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
       current: ${{ steps.current.outputs.current || steps.manual.outputs.current }}
-      published: ${{ steps.release.outputs.published }}
-      tag: ${{ steps.release.outputs.tag }}
+      published: ${{ steps.finalize.outputs.published }}
+      tag: ${{ steps.finalize.outputs.tag }}
     steps:
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,14 +66,25 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: echo "current=true" >> "$GITHUB_OUTPUT"
 
-      - name: Release
-        id: release
-        if: steps.current.outputs.current == 'true' || steps.manual.outputs.current == 'true'
-        uses: openhoo/hooversion/actions/release@528576f6fbc6136ec5f76ac53bf81d3e04aca4b3 # v1.0.6
+      - name: Prepare protected-branch release
+        if: >-
+          (steps.current.outputs.current == 'true' || steps.manual.outputs.current == 'true') &&
+          (github.event_name == 'workflow_dispatch' || !startsWith(github.event.workflow_run.head_commit.message, 'chore(release):'))
+        uses: openhoo/hooversion/actions/prepare-release@d536bb45b5c2dbf9a17c866c0fe48f54216a1673 # v1.0.7
         with:
           version: ${{ env.HOOVERSION_VERSION }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
+      - name: Finalize protected-branch release
+        id: finalize
+        if: >-
+          steps.current.outputs.current == 'true' &&
+          startsWith(github.event.workflow_run.head_commit.message, 'chore(release):')
+        uses: openhoo/hooversion/actions/release@d536bb45b5c2dbf9a17c866c0fe48f54216a1673 # v1.0.7
+        with:
+          version: ${{ env.HOOVERSION_VERSION }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
     name: Queue signed publication
