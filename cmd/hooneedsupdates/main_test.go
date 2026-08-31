@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -30,6 +31,35 @@ func TestRunHelpVersionAndUnknownCommand(t *testing.T) {
 	stderr.Reset()
 	if code := run(context.Background(), []string{"unknown"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "unknown command") {
 		t.Fatalf("unknown code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestReportedVersionUsesGoModuleMetadata(t *testing.T) {
+	previousVersion := version
+	previousReadBuildInfo := readBuildInfo
+	defer func() {
+		version = previousVersion
+		readBuildInfo = previousReadBuildInfo
+	}()
+
+	version = "dev"
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v0.1.1"}}, true
+	}
+	if got := reportedVersion(); got != "0.1.1" {
+		t.Fatalf("reportedVersion() = %q, want 0.1.1", got)
+	}
+
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+	}
+	if got := reportedVersion(); got != "dev" {
+		t.Fatalf("development reportedVersion() = %q, want dev", got)
+	}
+
+	version = "1.2.3-linked"
+	if got := reportedVersion(); got != "1.2.3-linked" {
+		t.Fatalf("linked reportedVersion() = %q, want linker override", got)
 	}
 }
 

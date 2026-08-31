@@ -3,6 +3,13 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and Semantic Versioning.
 
+## [0.1.1] - 2026-08-31
+
+### Fixed
+
+- Binaries installed with `go install ...@v0.1.1` now report their module version
+  when no release linker override is present.
+
 ## [0.1.0] - 2026-08-31
 
 ### Added
