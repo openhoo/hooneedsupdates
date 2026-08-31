@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to rebuild
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Signed release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      commit: ${{ steps.meta.outputs.commit }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Verify release metadata
+        id: meta
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUESTED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "tag must be a stable semantic version prefixed with v" >&2
+            exit 2
+          fi
+          version="${REQUESTED_TAG#v}"
+          test "$(tr -d '[:space:]' < VERSION)" = "$version"
+          test "$(git rev-parse "${REQUESTED_TAG}^{commit}")" = "$(git rev-parse HEAD)"
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+          {
+            echo "version=$version"
+            echo "tag=$REQUESTED_TAG"
+            echo "commit=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Verify source
+        run: |
+          go vet ./...
+          go test ./... -race -count=1
+      - name: Build release archives
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+        run: scripts/build-release.sh
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/hooneedsupdates_${{ steps.meta.outputs.tag }}.spdx.json
+          artifact-name: hooneedsupdates-sbom.spdx.json
+          syft-version: v1.51.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate checksums
+        run: cd dist && sha256sum -- * | sort -k2 > SHA256SUMS
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign release assets
+        run: |
+          for artifact in dist/*; do
+            cosign sign-blob "$artifact" --bundle "${artifact}.sigstore.json" --yes
+          done
+      - name: Attest release assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            for artifact in dist/*; do
+              timeout 3m gh release upload "$RELEASE_TAG" "$artifact" --clobber
+            done
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG" dist/*
+          fi
+
+  container:
+    name: Signed container
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Image metadata
+        id: meta
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          minor="${VERSION%.*}"
+          major="${VERSION%%.*}"
+          {
+            echo 'tags<<EOF'
+            echo "ghcr.io/openhoo/hooneedsupdates:v${VERSION}"
+            echo "ghcr.io/openhoo/hooneedsupdates:${VERSION}"
+            echo "ghcr.io/openhoo/hooneedsupdates:${minor}"
+            echo "ghcr.io/openhoo/hooneedsupdates:${major}"
+            echo 'ghcr.io/openhoo/hooneedsupdates:latest'
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ needs.release.outputs.version }}
+            COMMIT=${{ needs.release.outputs.commit }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+          sbom: true
+          provenance: mode=max
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/openhoo/hooneedsupdates@${DIGEST}"

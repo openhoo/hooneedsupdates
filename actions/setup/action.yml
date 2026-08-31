@@ -1,0 +1,21 @@
+name: Set up HooNeedsUpdates
+description: Download and verify a released HooNeedsUpdates binary.
+inputs:
+  version:
+    description: Stable HooNeedsUpdates release version without a leading v.
+    required: true
+outputs:
+  executable:
+    description: Absolute path to the installed executable.
+    value: ${{ steps.install.outputs.executable }}
+runs:
+  using: composite
+  steps:
+    - name: Download HooNeedsUpdates
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        RUNNER_ARCH_VALUE: ${{ runner.arch }}
+        RUNNER_OS_VALUE: ${{ runner.os }}
+      run: bash "$GITHUB_ACTION_PATH/install.sh"

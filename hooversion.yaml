@@ -1,0 +1,12 @@
+version: 1
+branches:
+  - main
+packages:
+  - name: hooneedsupdates
+    path: .
+    type: version-file
+    manifest: VERSION
+hooks:
+  afterVersion: []
+github:
+  releases: true

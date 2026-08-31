@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  HOOVERSION_VERSION: 1.0.6
+
+jobs:
+  commits:
+    name: Lint commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Lint Conventional Commits
+        uses: openhoo/hooversion/actions/lint@528576f6fbc6136ec5f76ac53bf81d3e04aca4b3 # v1.0.6
+        with:
+          version: ${{ env.HOOVERSION_VERSION }}
+
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test ./... -race -count=1 -coverprofile=coverage.out
+      - name: Build static binary
+        run: CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version=ci' -o bin/hooneedsupdates ./cmd/hooneedsupdates
+      - name: Smoke CLI
+        run: |
+          bin/hooneedsupdates version
+          bin/hooneedsupdates scan --format json --fail-on unresolved . > update-report.json
+          jq -e '.schemaVersion == 1 and .summary.unresolved == 0' update-report.json >/dev/null
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  policy:
+    name: Hoostack policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Enforce Hoolicy policy
+        uses: openhoo/hoolicy/actions/check@f1b9be32483e3353e38ef3b5703217d2723e735e # v0.2.4
+        with:
+          version: 0.2.4
+      - name: Scan with Hooray
+        uses: openhoo/hooray/actions/scan@5446c51a79d115048601d3f42d6a9127b49fb322 # v0.6.3
+        with:
+          version: 0.6.3
+          policy: hooray-policy.yaml
+          format: table
+          output: ''
+      - name: Analyze with Hoonarqube
+        uses: openhoo/hoonarqube/actions/analyze@0ed50de75e6e8c097c44e6b50a16f6d8817acedf # v0.2.3
+        with:
+          version: 0.2.3
+          paths: |
+            cmd
+            internal
+          output: ${{ runner.temp }}/hoonarqube.json
+          fail-on: none
