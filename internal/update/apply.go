@@ -2,6 +2,7 @@ package update
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 type AppliedFile struct {
 	Path    string `json:"path"`
 	Updates int    `json:"updates"`
+	Kind    string `json:"kind"`
+	Created bool   `json:"created"`
 	Before  []byte `json:"-"`
 	After   []byte `json:"-"`
 }
@@ -24,14 +27,19 @@ type edit struct {
 }
 
 type plannedFile struct {
-	path string
-	mode os.FileMode
-	file AppliedFile
+	root    string
+	path    string
+	mode    os.FileMode
+	existed bool
+	file    AppliedFile
 }
 
 func Apply(root string, report Report, write bool) ([]AppliedFile, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateReport(absRoot, report); err != nil {
 		return nil, err
 	}
 	plans, err := planReport(absRoot, report)
@@ -48,6 +56,19 @@ func Apply(root string, report Report, write bool) ([]AppliedFile, error) {
 		}
 	}
 	return result, nil
+}
+
+func validateReport(root string, report Report) error {
+	if report.SchemaVersion != 0 && report.SchemaVersion != 2 {
+		return fmt.Errorf("unsupported report schema version %d", report.SchemaVersion)
+	}
+	if report.Root != "" && filepath.Clean(filepath.FromSlash(report.Root)) != filepath.Clean(root) {
+		return fmt.Errorf("report root %q does not match repository %q", report.Root, root)
+	}
+	if report.PlanDigest != "" && report.PlanDigest != planDigest(report.Updates) {
+		return errors.New("report plan digest does not match updates")
+	}
+	return nil
 }
 
 func planReport(root string, report Report) ([]plannedFile, error) {
@@ -76,6 +97,9 @@ func planReport(root string, report Report) ([]plannedFile, error) {
 }
 
 func writePlans(plans []plannedFile) error {
+	if err := validateWritePlans(plans); err != nil {
+		return err
+	}
 	for index, plan := range plans {
 		if err := atomicWrite(plan.path, plan.file.After, plan.mode); err != nil {
 			rollbackErr := rollback(plans[:index+1])
@@ -119,8 +143,8 @@ func planUpdates(root, rel string, updates []Update) (*plannedFile, error) {
 	if bytes.Equal(before, after) {
 		return nil, nil
 	}
-	file := AppliedFile{Path: rel, Updates: len(updates), Before: before, After: after}
-	return &plannedFile{path: path, mode: info.Mode().Perm(), file: file}, nil
+	file := AppliedFile{Path: rel, Updates: len(updates), Kind: "manifest", Before: before, After: after}
+	return &plannedFile{root: root, path: path, mode: info.Mode().Perm(), existed: true, file: file}, nil
 }
 
 func buildEdits(before []byte, rel string, updates []Update) ([]edit, error) {
@@ -169,6 +193,24 @@ func containedPath(root, rel string) (string, error) {
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes repository root: %q", rel)
 	}
+	current := filepath.Clean(root)
+	parts := strings.Split(filepath.Clean(filepath.FromSlash(rel)), string(filepath.Separator))
+	for index, part := range parts {
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if errors.Is(statErr, os.ErrNotExist) && index == len(parts)-1 {
+			break
+		}
+		if statErr != nil {
+			return "", statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("path contains symlink component: %q", rel)
+		}
+		if index < len(parts)-1 && !info.IsDir() {
+			return "", fmt.Errorf("path component is not a directory: %q", rel)
+		}
+	}
 	return path, nil
 }
 
@@ -176,12 +218,57 @@ func rollback(plans []plannedFile) error {
 	var failures []string
 	for index := len(plans) - 1; index >= 0; index-- {
 		plan := plans[index]
+		if !plan.existed {
+			if err := os.Remove(plan.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				failures = append(failures, fmt.Sprintf("%s: %v", plan.file.Path, err))
+			}
+			continue
+		}
 		if err := atomicWrite(plan.path, plan.file.Before, plan.mode); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", plan.file.Path, err))
 		}
 	}
 	if len(failures) > 0 {
 		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func validateWritePlans(plans []plannedFile) error {
+	for _, plan := range plans {
+		path, err := containedPath(plan.root, plan.file.Path)
+		if err != nil {
+			return fmt.Errorf("validate %s path: %w", plan.file.Path, err)
+		}
+		if path != plan.path {
+			return fmt.Errorf("validate %s path: resolved target changed", plan.file.Path)
+		}
+		info, err := os.Lstat(plan.path)
+		if !plan.existed {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("validate new file %s: %w", plan.file.Path, err)
+			}
+			return fmt.Errorf("%s appeared after planning", plan.file.Path)
+		}
+		if err != nil {
+			return fmt.Errorf("validate %s: %w", plan.file.Path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to replace non-regular file %s", plan.file.Path)
+		}
+		if info.Mode().Perm() != plan.mode {
+			return fmt.Errorf("%s permissions changed after planning", plan.file.Path)
+		}
+		current, err := os.ReadFile(plan.path)
+		if err != nil {
+			return fmt.Errorf("validate %s: %w", plan.file.Path, err)
+		}
+		if !bytes.Equal(current, plan.file.Before) {
+			return fmt.Errorf("%s changed after planning", plan.file.Path)
+		}
 	}
 	return nil
 }

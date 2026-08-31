@@ -14,9 +14,11 @@ It answers three questions without changing a repository:
 
 `apply` is also preview-only unless `--write` is explicitly supplied. Writes
 verify the scanned bytes again, reject symlinks and non-regular files, and replace
-files atomically. GitHub Actions are moved to immutable commit SHAs while keeping
-their release tag as an auditable comment. OpenHoo action `version` inputs are
-updated with the action revision.
+files atomically. `apply --lockfiles` performs the approved edit twice in fresh,
+detached Git worktrees and accepts only byte-identical manifest and lockfile
+results. GitHub Actions are moved to immutable commit SHAs while keeping their
+release tag as an auditable comment. OpenHoo action `version` inputs are updated
+with the action revision.
 
 ## Supported inputs
 
@@ -30,11 +32,19 @@ updated with the action revision.
 | Containers | `Dockerfile*` | Docker Hub | Version-like tags on the same image channel |
 | Custom | configured regex capture | GitHub releases | Named `currentValue` capture |
 
-The first release deliberately does not regenerate lockfiles, merge pull
-requests, automerge, or execute repository-provided commands. After `--write`,
-run the ecosystem's lockfile command and complete the repository's full test
-suite before committing. This boundary keeps an untrusted repository from
-turning updater configuration into remote code execution.
+Lockfile mode supports `go.sum`/`go.work.sum`, `Cargo.lock`, `bun.lock`/
+`bun.lockb`, `package-lock.json`, and NuGet `packages.lock.json`. It invokes only
+fixed package-manager commands with scripts and Git hooks disabled, isolated
+caches, bounded output, and a configured timeout. NuGet restore uses generated
+static `Microsoft.NET.Sdk` projects instead of evaluating repository MSBuild
+targets. Unsupported dynamic or conditional NuGet inputs and repository Cargo
+configuration fail closed. Detailed boundaries live in
+[docs/lockfile-updates.md](docs/lockfile-updates.md).
+
+HooNeedsUpdates does not merge pull requests, automerge, or execute configured
+repository commands. Lockfile success proves a reproducible dependency graph,
+not source compatibility. Run the repository's full build and test suite before
+committing.
 
 ## Install
 
@@ -68,6 +78,8 @@ hooneedsupdates init
 hooneedsupdates scan .
 hooneedsupdates scan --format json --fail-on unresolved .
 hooneedsupdates apply .
+hooneedsupdates apply --lockfiles .
+hooneedsupdates apply --lockfiles --write .
 hooneedsupdates apply --write .
 ```
 
@@ -88,6 +100,7 @@ excludePaths:
 allowedUpdateTypes: [patch, minor, major]
 concurrency: 8
 requestTimeout: 15s
+lockfileTimeout: 5m
 includePrereleases: false
 ignore:
   - dependency: '^example/legacy$'
@@ -132,7 +145,11 @@ automation can consume JSON output to build a dashboard or reviewed update PR.
 - Symlinked manifests are never followed.
 - Apply verifies original byte ranges and rejects overlapping edits.
 - Files are replaced atomically while preserving their permission bits.
-- No repository configuration can run shell commands.
+- Lockfile mode disables lifecycle scripts and Git hooks, isolates package
+  caches, rejects Git content filters, and accepts only expected paths.
+- NuGet lockfiles come from sanitized static project graphs; original MSBuild
+  projects are never evaluated.
+- No updater configuration can run shell commands.
 - Pre-releases are excluded unless explicitly enabled.
 - GitHub Action updates resolve annotated tags to their final commit object.
 
@@ -140,10 +157,11 @@ Report vulnerabilities through [GitHub private vulnerability reporting](https://
 
 ## Project status
 
-Version `0.1.x` is useful for deterministic inventory, update planning, and
-reviewed manifest edits. Lockfile-aware isolated worktrees, grouping, update
-PR lifecycle, registry authentication beyond GitHub, and organization-wide
-dashboards are tracked in [ROADMAP.md](ROADMAP.md).
+Current main implements the `v0.2` lockfile-safe milestone for deterministic
+inventory, reviewed manifest edits, and reproducible Go, Cargo, Bun/npm, and
+static NuGet lockfile changes. Grouping, update PR lifecycle, registry
+authentication beyond GitHub, and organization-wide dashboards remain tracked
+in [ROADMAP.md](ROADMAP.md).
 
 The Hoostack alignment review that led to this project is recorded in
 [docs/hoostack-audit-2026-08-31.md](docs/hoostack-audit-2026-08-31.md).

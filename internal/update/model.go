@@ -58,6 +58,7 @@ type Report struct {
 	SchemaVersion int       `json:"schemaVersion"`
 	GeneratedAt   time.Time `json:"generatedAt"`
 	Root          string    `json:"root"`
+	PlanDigest    string    `json:"planDigest"`
 	Summary       Summary   `json:"summary"`
 	Updates       []Update  `json:"updates"`
 }

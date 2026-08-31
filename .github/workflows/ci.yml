@@ -48,7 +48,7 @@ jobs:
         run: |
           bin/hooneedsupdates version
           bin/hooneedsupdates scan --format json --fail-on unresolved . > update-report.json
-          jq -e '.schemaVersion == 1 and .summary.unresolved == 0' update-report.json >/dev/null
+          jq -e '.schemaVersion == 2 and (.planDigest | test("^sha256:[0-9a-f]{64}$")) and .summary.unresolved == 0' update-report.json >/dev/null
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
