@@ -106,3 +106,37 @@ func TestReportExitModes(t *testing.T) {
 		t.Fatalf("invalid=%d", got)
 	}
 }
+
+func TestUpdateReposRejectsMissingInventoryAndWriteTokenBeforeNetwork(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"update-repos"}, &stdout, &stderr); code != 2 ||
+		!strings.Contains(stderr.String(), "requires owner/repository") {
+		t.Fatalf("missing inventory code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(
+		context.Background(),
+		[]string{"update-repos", "--write", "openhoo/tool"},
+		&stdout,
+		&stderr,
+	); code != 1 || !strings.Contains(stderr.String(), "GH_TOKEN") {
+		t.Fatalf("missing token code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(
+		context.Background(),
+		[]string{"update-repos", "--format", "xml", "openhoo/tool"},
+		&stdout,
+		&stderr,
+	); code != 2 || !strings.Contains(stderr.String(), "unknown format") {
+		t.Fatalf("invalid format code=%d stderr=%q", code, stderr.String())
+	}
+}

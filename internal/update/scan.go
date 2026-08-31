@@ -127,6 +127,34 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 	return report, nil
 }
 
+// FilterReport returns a new, internally consistent report containing only
+// entries accepted by keep. Its summary and plan digest are recomputed so the
+// result remains safe to pass to Apply or ApplyWithLockfiles.
+func FilterReport(report Report, keep func(Update) bool) Report {
+	filtered := report
+	filtered.Updates = make([]Update, 0, len(report.Updates))
+	filtered.Summary = Summary{}
+	for _, entry := range report.Updates {
+		if !keep(entry) {
+			continue
+		}
+		filtered.Updates = append(filtered.Updates, entry)
+		filtered.Summary.Detected++
+		switch entry.Status {
+		case "current":
+			filtered.Summary.Current++
+		case "outdated":
+			filtered.Summary.Outdated++
+		case "unresolved":
+			filtered.Summary.Unresolved++
+		case "ignored":
+			filtered.Summary.Ignored++
+		}
+	}
+	filtered.PlanDigest = planDigest(filtered.Updates)
+	return filtered
+}
+
 func planDigest(updates []Update) string {
 	digest := sha256.New()
 	writeDigestField(digest, "hooneedsupdates-plan-v1")

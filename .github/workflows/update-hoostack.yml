@@ -1,0 +1,74 @@
+name: Update Hoostack
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  repository_dispatch:
+    types: [hoostack-tool-released]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-hoostack
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile dependency pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check GitHub App configuration
+        id: configured
+        shell: bash
+        env:
+          APP_CLIENT_ID: ${{ vars.HOONEEDSUPDATES_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.HOONEEDSUPDATES_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APP_CLIENT_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then
+            echo 'value=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'value=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Configure HOONEEDSUPDATES_APP_CLIENT_ID and HOONEEDSUPDATES_APP_PRIVATE_KEY to activate fleet updates.'
+          fi
+
+      - name: Create repository-scoped GitHub App token
+        if: steps.configured.outputs.value == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v3.2.0
+        with:
+          client-id: ${{ vars.HOONEEDSUPDATES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOONEEDSUPDATES_APP_PRIVATE_KEY }}
+          owner: openhoo
+          repositories: |
+            hooneedsupdates
+            hooversion
+            hoolicy
+            hooray
+            hoonarqube
+            hoocloak
+            hoomail
+            hoosharper
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Checkout HooNeedsUpdates
+        if: steps.configured.outputs.value == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        if: steps.configured.outputs.value == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+
+      - name: Reconcile Hoostack update pull requests
+        if: steps.configured.outputs.value == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: go run ./cmd/hooneedsupdates update-repos --write --format json

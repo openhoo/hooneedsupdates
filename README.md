@@ -20,6 +20,11 @@ results. GitHub Actions are moved to immutable commit SHAs while keeping their
 release tag as an auditable comment. OpenHoo action `version` inputs are updated
 with the action revision.
 
+`update-repos` turns those byte-verified plans into one managed pull request per
+repository. It is read-only unless `--write` is supplied. Optional native GitHub
+auto-merge is content-gated by update type, manager, dependency expression, and
+maximum update count; repository checks and reviews remain authoritative.
+
 ## Supported inputs
 
 | Manager | Files | Datasource | Apply support |
@@ -41,10 +46,11 @@ targets. Unsupported dynamic or conditional NuGet inputs and repository Cargo
 configuration fail closed. Detailed boundaries live in
 [docs/lockfile-updates.md](docs/lockfile-updates.md).
 
-HooNeedsUpdates does not merge pull requests, automerge, or execute configured
-repository commands. Lockfile success proves a reproducible dependency graph,
-not source compatibility. Run the repository's full build and test suite before
-committing.
+HooNeedsUpdates never pushes directly to a default branch and does not execute
+configured repository commands. It can request native GitHub auto-merge for an
+eligible managed PR, but has no direct-merge fallback or branch-rule bypass.
+Lockfile success proves a reproducible dependency graph, not source
+compatibility.
 
 ## Install
 
@@ -81,6 +87,8 @@ hooneedsupdates apply .
 hooneedsupdates apply --lockfiles .
 hooneedsupdates apply --lockfiles --write .
 hooneedsupdates apply --write .
+hooneedsupdates update-repos openhoo/hooversion openhoo/hoolicy
+GH_TOKEN="$INSTALLATION_TOKEN" hooneedsupdates update-repos --write
 ```
 
 Exit behavior:
@@ -102,6 +110,22 @@ concurrency: 8
 requestTimeout: 15s
 lockfileTimeout: 5m
 includePrereleases: false
+automation:
+  repositories: [openhoo/hooversion, openhoo/hoolicy]
+  branchPrefix: hooneedsupdates
+  lockfiles: true
+  selection:
+    managers: [github-actions, custom]
+    dependencies: ['^openhoo/']
+  autoMerge:
+    enabled: true
+    updateTypes: [patch, minor]
+    managers: [github-actions, custom]
+    dependencies: ['^openhoo/']
+    maxUpdates: 10
+    requireLockfiles: true
+  mergeMethod: squash
+  closeStale: true
 ignore:
   - dependency: '^example/legacy$'
     managers: [github-actions]
@@ -117,7 +141,9 @@ customManagers:
 
 Configuration rejects unknown fields, invalid regular expressions, unknown
 managers, unreasoned ignores, and custom matchers without a named
-`currentValue` capture.
+`currentValue` capture. Auto-merge is rejected for draft PRs or unsafe policy
+values. See [repository automation](docs/repository-automation.md) for exact PR
+lifecycle, authentication, policy, and recovery behavior.
 
 ## GitHub Actions
 
@@ -134,7 +160,9 @@ Pin the setup action to the commit behind the desired HooNeedsUpdates release:
 
 Using `--fail-on unresolved` keeps registry outages and unsupported sources
 visible without blocking merely because a normal update exists. Scheduled
-automation can consume JSON output to build a dashboard or reviewed update PR.
+automation can use `update-repos` to reconcile reviewed update PRs. The bundled
+Hoostack workflow uses a repository-scoped GitHub App token when its App client
+ID and private-key secret are configured.
 
 ## Security model
 
@@ -150,6 +178,14 @@ automation can consume JSON output to build a dashboard or reviewed update PR.
 - NuGet lockfiles come from sanitized static project graphs; original MSBuild
   projects are never evaluated.
 - No updater configuration can run shell commands.
+- Fleet writes require an explicit `--write` and a token; preview remains
+  remote-read-only.
+- Managed branches use exact-SHA force-with-lease and are never overwritten
+  without matching PR ownership evidence.
+- Any unexpected changed path, unresolved dependency, or non-reproducible
+  lockfile result stops that repository before publication.
+- Auto-merge uses GitHub's native request and is disabled when a new plan no
+  longer satisfies policy.
 - Pre-releases are excluded unless explicitly enabled.
 - GitHub Action updates resolve annotated tags to their final commit object.
 
@@ -157,11 +193,11 @@ Report vulnerabilities through [GitHub private vulnerability reporting](https://
 
 ## Project status
 
-Current main implements the `v0.2` lockfile-safe milestone for deterministic
-inventory, reviewed manifest edits, and reproducible Go, Cargo, Bun/npm, and
-static NuGet lockfile changes. Grouping, update PR lifecycle, registry
-authentication beyond GitHub, and organization-wide dashboards remain tracked
-in [ROADMAP.md](ROADMAP.md).
+Current source tree implements deterministic inventory, reviewed manifest edits,
+reproducible Go, Cargo, Bun/npm, and static NuGet lockfile changes, plus the
+idempotent GitHub update-PR lifecycle. Grouped update families, minimum-age
+policy, resumable rate-limit state, GitLab automation, and organization-wide
+dashboards remain tracked in [ROADMAP.md](ROADMAP.md).
 
 The Hoostack alignment review that led to this project is recorded in
 [docs/hoostack-audit-2026-08-31.md](docs/hoostack-audit-2026-08-31.md).
