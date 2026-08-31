@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 (2026-08-31)
+
+### Features
+
+- **updates:** add reproducible lockfile application (#6) (5eac341)
+
 ## 0.1.2 (2026-08-31)
 
 ### Bug Fixes
