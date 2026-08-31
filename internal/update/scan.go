@@ -2,7 +2,10 @@ package update
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -100,7 +103,13 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 	if s.Now != nil {
 		now = s.Now
 	}
-	report := Report{SchemaVersion: 1, GeneratedAt: now().UTC(), Root: filepath.ToSlash(absRoot), Updates: updates}
+	report := Report{
+		SchemaVersion: 2,
+		GeneratedAt:   now().UTC(),
+		Root:          filepath.ToSlash(absRoot),
+		PlanDigest:    planDigest(updates),
+		Updates:       updates,
+	}
 	report.Summary.Detected = len(updates)
 	for _, entry := range updates {
 		switch entry.Status {
@@ -116,6 +125,30 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 		}
 	}
 	return report, nil
+}
+
+func planDigest(updates []Update) string {
+	digest := sha256.New()
+	writeDigestField(digest, "hooneedsupdates-plan-v1")
+	for _, entry := range updates {
+		if entry.Status != "outdated" {
+			continue
+		}
+		for _, field := range []string{
+			string(entry.Manager), entry.Datasource, entry.Name, entry.CurrentVersion,
+			entry.CurrentValue, entry.File, fmt.Sprintf("%d", entry.Start),
+			fmt.Sprintf("%d", entry.End), entry.Prefix, entry.Suffix,
+			entry.LatestVersion, entry.LatestDigest, entry.UpdateType,
+		} {
+			writeDigestField(digest, field)
+		}
+	}
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func writeDigestField(digest hash.Hash, value string) {
+	_, _ = fmt.Fprintf(digest, "%d:", len(value))
+	_, _ = digest.Write([]byte(value))
 }
 
 func classifyResolved(cfg config.Config, candidate Candidate, resolution Resolution) Update {

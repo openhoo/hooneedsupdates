@@ -42,6 +42,16 @@ func TestValidateRequiresReasonAndNamedCapture(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsafeLockfileTimeout(t *testing.T) {
+	for _, value := range []string{"0s", "invalid", "31m"} {
+		cfg := Default()
+		cfg.LockfileTimeout = value
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "lockfileTimeout") {
+			t.Fatalf("LockfileTimeout=%q error=%v", value, err)
+		}
+	}
+}
+
 func TestLoadResolvesExplicitPathAgainstRoot(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "custom.yml"), []byte("version: 1\nmanagers: [gomod]\nconcurrency: 1\nrequestTimeout: 1s\n"), 0o644); err != nil {

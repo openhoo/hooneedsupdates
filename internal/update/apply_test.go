@@ -126,3 +126,83 @@ func TestApplyValidatesEveryFileBeforeWriting(t *testing.T) {
 		t.Fatal("first file changed before full validation")
 	}
 }
+
+func TestApplyRejectsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "go.mod"), []byte("module old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "nested")); err != nil {
+		t.Fatal(err)
+	}
+	report := Report{Updates: []Update{{
+		Candidate:     Candidate{Manager: ManagerGoMod, Name: "module", CurrentVersion: "old", CurrentValue: "old", File: "nested/go.mod", Start: 7, End: 10},
+		LatestVersion: "new", Status: "outdated",
+	}}}
+	if _, err := Apply(root, report, true); err == nil || !strings.Contains(err.Error(), "symlink component") {
+		t.Fatalf("error=%v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(outside, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "module old\n" {
+		t.Fatalf("outside file changed: %q", data)
+	}
+}
+
+func TestWritePlansRejectsTargetMetadataChangedAfterPlanning(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+		want   string
+	}{
+		{
+			name: "permissions",
+			mutate: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "sub", "package.json"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "permissions changed",
+		},
+		{
+			name: "symlink parent",
+			mutate: func(t *testing.T, root string) {
+				original := filepath.Join(root, "original")
+				if err := os.Rename(filepath.Join(root, "sub"), original); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(original, filepath.Join(root, "sub")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "path contains symlink",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			content := `{"dependencies":{"demo":"1.0.0"}}`
+			if err := os.WriteFile(filepath.Join(root, "sub", "package.json"), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			start := strings.Index(content, "1.0.0")
+			report := Report{Updates: []Update{{
+				Candidate:     Candidate{Manager: ManagerNPM, Name: "demo", CurrentVersion: "1.0.0", CurrentValue: "1.0.0", File: "sub/package.json", Start: start, End: start + len("1.0.0")},
+				LatestVersion: "1.1.0", Status: "outdated",
+			}}}
+			plans, err := planReport(root, report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(t, root)
+			if err := writePlans(plans); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("changed target accepted: %v", err)
+			}
+		})
+	}
+}

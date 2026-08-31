@@ -14,10 +14,14 @@ inputs, and a real action/module update survives the target repository's tests.
 
 ## v0.2 - Lockfile-safe updates
 
-- Parse lockfiles separately from manifest constraints.
-- Regenerate each ecosystem in an isolated Git worktree.
-- Compare resulting manifests and lockfiles against the approved plan.
-- Roll back the isolated worktree on tool failure or unexpected files.
+Status: implemented on main and qualified against real Go, Cargo, Bun/npm, and
+NuGet repositories. Release remains a separate publication step.
+
+- [x] Parse lockfiles separately from manifest constraints.
+- [x] Regenerate each ecosystem twice in isolated Git worktrees.
+- [x] Compare resulting manifests and lockfiles against the approved plan.
+- [x] Leave the source worktree unchanged on tool failure, nondeterminism, or
+  unexpected files; roll back partial source writes.
 
 Exit: Go, Cargo, Bun/npm, and NuGet updates produce reproducible lockfile diffs
 without executing repository-provided commands.

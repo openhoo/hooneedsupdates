@@ -29,6 +29,7 @@ type Config struct {
 	AllowedUpdateTypes []string        `yaml:"allowedUpdateTypes,omitempty"`
 	Concurrency        int             `yaml:"concurrency,omitempty"`
 	RequestTimeout     string          `yaml:"requestTimeout,omitempty"`
+	LockfileTimeout    string          `yaml:"lockfileTimeout,omitempty"`
 	IncludePrereleases bool            `yaml:"includePrereleases,omitempty"`
 }
 
@@ -54,6 +55,7 @@ func Default() Config {
 		AllowedUpdateTypes: []string{"patch", "minor", "major"},
 		Concurrency:        8,
 		RequestTimeout:     "15s",
+		LockfileTimeout:    "5m",
 	}
 }
 
@@ -161,6 +163,10 @@ func (c *Config) validateRuntime() error {
 	requestTimeout, err := time.ParseDuration(c.RequestTimeout)
 	if err != nil || requestTimeout <= 0 {
 		return errors.New("requestTimeout must be a positive duration")
+	}
+	lockfileTimeout, err := time.ParseDuration(c.LockfileTimeout)
+	if err != nil || lockfileTimeout <= 0 || lockfileTimeout > 30*time.Minute {
+		return errors.New("lockfileTimeout must be a positive duration no greater than 30m")
 	}
 	return nil
 }

@@ -112,6 +112,7 @@ func runApply(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file")
 	write := flags.Bool("write", false, "write the reviewed update plan")
+	lockfiles := flags.Bool("lockfiles", false, "regenerate supported lockfiles reproducibly in isolated Git worktrees")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -119,12 +120,22 @@ func runApply(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	if !ok {
 		return 2
 	}
-	report, _, err := scan(ctx, root, *configPath)
+	report, cfg, err := scan(ctx, root, *configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	files, err := update.Apply(root, report, *write)
+	var files []update.AppliedFile
+	if *lockfiles {
+		lockfileTimeout, parseErr := time.ParseDuration(cfg.LockfileTimeout)
+		if parseErr != nil {
+			fmt.Fprintf(stderr, "invalid lockfileTimeout: %v\n", parseErr)
+			return 1
+		}
+		files, err = update.ApplyWithLockfiles(ctx, root, report, *write, lockfileTimeout)
+	} else {
+		files, err = update.Apply(root, report, *write)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -138,12 +149,21 @@ func runApply(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		mode = "Applied"
 	}
 	for _, file := range files {
-		fmt.Fprintf(stdout, "%s %s (%d updates)\n", mode, file.Path, file.Updates)
+		detail := fmt.Sprintf("%d updates", file.Updates)
+		if file.Kind == "lockfile" {
+			detail = "lockfile"
+			if file.Created {
+				detail = "new lockfile"
+			}
+		}
+		fmt.Fprintf(stdout, "%s %s (%s)\n", mode, file.Path, detail)
 	}
 	if !*write {
 		fmt.Fprintln(stdout, "No files changed. Re-run with --write after review.")
+	} else if *lockfiles {
+		fmt.Fprintln(stdout, "Manifest and lockfile edits written after two reproducible isolated regenerations.")
 	} else {
-		fmt.Fprintln(stdout, "Manifest edits written. Regenerate and verify lockfiles before commit.")
+		fmt.Fprintln(stdout, "Manifest edits written. Re-run with --lockfiles to regenerate supported lockfiles before commit.")
 	}
 	return 0
 }
@@ -252,7 +272,7 @@ func singleRoot(args []string, stderr io.Writer) (string, bool) {
 func printHelp(output io.Writer) {
 	commands := []string{
 		"scan [path]   Resolve and report dependency updates",
-		"apply [path]  Preview edits; --write applies them",
+		"apply [path]  Preview edits; --lockfiles verifies lockfiles; --write applies them",
 		"init [path]   Create strict starter configuration",
 		"version       Print version",
 	}
@@ -283,6 +303,7 @@ allowedUpdateTypes:
   - major
 concurrency: 8
 requestTimeout: 15s
+lockfileTimeout: 5m
 includePrereleases: false
 customManagers:
   - name: hooversion-version
