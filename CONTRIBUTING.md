@@ -19,4 +19,6 @@ ignored input, byte-range correctness, and fail-closed behavior. Network
 datasources need bounded response handling and deterministic tests.
 
 Commits use Conventional Commits. Pull requests must explain compatibility and
-security impact. Generated lockfile changes must accompany manifest changes.
+security impact. Maintainers squash-merge pull requests using the Conventional
+Commit pull-request title so the protected `main` history remains policy-valid.
+Generated lockfile changes must accompany manifest changes.
