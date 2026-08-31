@@ -38,9 +38,16 @@ atomic and individually reviewable.
 
 ## v0.4 - GitHub pull-request lifecycle
 
-- GitHub App authentication and least-privilege repository selection.
-- Idempotent branches, pull requests, labels, rebases, and stale-plan closure.
-- Required-check readback before automerge; automerge disabled by default.
+Status: core lifecycle implemented in Unreleased. GitHub App installation tokens
+are consumed through the bundled scheduled workflow; resumable API rate-limit
+state remains outstanding.
+
+- [x] GitHub App installation-token authentication and least-privilege
+  repository selection.
+- [x] Idempotent branches, pull requests, labels, exact-SHA rebases, and
+  stale-plan closure.
+- [x] Native GitHub auto-merge behind exact content policy; repository checks,
+  reviews, and rules remain authoritative and auto-merge defaults to disabled.
 - Rate-limit and abuse-limit backoff with resumable state.
 
 Exit: repeated runs converge without duplicate PRs or bypassing branch rules.

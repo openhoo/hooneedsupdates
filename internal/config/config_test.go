@@ -65,3 +65,64 @@ func TestLoadResolvesExplicitPathAgainstRoot(t *testing.T) {
 		t.Fatalf("path=%q", path)
 	}
 }
+
+func TestAutomationDefaultsAndValidation(t *testing.T) {
+	cfg := Default()
+	if !cfg.Automation.Lockfiles || !cfg.Automation.CloseStale || cfg.Automation.AutoMerge.Enabled || cfg.Automation.MergeMethod != "squash" {
+		t.Fatalf("unexpected automation defaults: %+v", cfg.Automation)
+	}
+
+	valid := Default()
+	valid.Automation.Repositories = []string{"openhoo/hooversion", "openhoo/hoolicy"}
+	valid.Automation.AutoMerge.Enabled = true
+	valid.Automation.AutoMerge.Managers = []string{"github-actions", "custom"}
+	valid.Automation.AutoMerge.Dependencies = []string{`^openhoo/`}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := []Automation{
+		{Repositories: []string{"not-a-repository"}, BranchPrefix: "bot", MergeMethod: "squash", CommitAuthor: "Bot", CommitEmail: "bot@example.com"},
+		{Repositories: []string{"openhoo/tool", "OPENHOO/TOOL"}, BranchPrefix: "bot", MergeMethod: "squash", CommitAuthor: "Bot", CommitEmail: "bot@example.com"},
+		{Repositories: []string{"openhoo/tool"}, BranchPrefix: "../main", MergeMethod: "squash", CommitAuthor: "Bot", CommitEmail: "bot@example.com"},
+		{Repositories: []string{"openhoo/tool"}, BranchPrefix: "bot/.hidden", MergeMethod: "squash", CommitAuthor: "Bot", CommitEmail: "bot@example.com"},
+		{Repositories: []string{"openhoo/tool"}, BranchPrefix: "bot", MergeMethod: "fast-forward", AutoMerge: cfg.Automation.AutoMerge, CommitAuthor: "Bot", CommitEmail: "bot@example.com"},
+		{Repositories: []string{"openhoo/tool"}, BranchPrefix: "bot", MergeMethod: "squash", Draft: true, AutoMerge: AutoMerge{Enabled: true, UpdateTypes: []string{"patch"}, MaxUpdates: 1, RequireLockfiles: true}, Lockfiles: true, CommitAuthor: "Bot", CommitEmail: "bot@example.com"},
+	}
+	for _, automation := range invalid {
+		cfg := Default()
+		cfg.Automation = automation
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid automation accepted: %+v", automation)
+		}
+	}
+}
+
+func TestAutomationSelectionRejectsInvalidPolicy(t *testing.T) {
+	for _, selection := range []Selection{
+		{UpdateTypes: []string{"security"}},
+		{Managers: []string{"unknown"}},
+		{Dependencies: []string{"["}},
+	} {
+		cfg := Default()
+		cfg.Automation.Selection = selection
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid selection accepted: %+v", selection)
+		}
+	}
+}
+
+func TestLoadAutomationPreservesSafeDefaults(t *testing.T) {
+	root := t.TempDir()
+	contents := "version: 1\nautomation:\n  repositories: [openhoo/hooversion]\n  autoMerge:\n    enabled: true\n"
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := Load(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Automation.Lockfiles || !cfg.Automation.CloseStale || cfg.Automation.MergeMethod != "squash" || len(cfg.Automation.AutoMerge.UpdateTypes) != 2 {
+		t.Fatalf("defaults were not preserved: %+v", cfg.Automation)
+	}
+}

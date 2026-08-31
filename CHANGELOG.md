@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Add read-only-by-default multi-repository update reconciliation with exact-SHA
+  branch leases, managed pull requests, stale-plan closure, and deterministic
+  commits.
+- Add configurable native GitHub auto-merge policy by update type, manager,
+  dependency expression, maximum update count, and lockfile requirement.
+- Add a fail-closed automation selection so tool-pin PRs stay independent from
+  unrelated package-manager updates and unresolved selected inputs remain fatal.
+- Add scheduled Hoostack reconciliation through a repository-scoped GitHub App
+  installation token.
+
 ## 0.2.0 (2026-08-31)
 
 ### Features

@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -53,5 +54,28 @@ func TestPinnedActionWithStaleCommentNeedsUpdate(t *testing.T) {
 	candidate.CurrentVersion = digest
 	if !current(candidate, resolution) {
 		t.Fatal("commentless current digest treated as outdated")
+	}
+}
+
+func TestFilterReportRecomputesSummaryAndDigestWithoutMutatingSource(t *testing.T) {
+	report := Report{
+		SchemaVersion: 2,
+		PlanDigest:    "original",
+		Summary:       Summary{Detected: 3, Current: 1, Outdated: 1, Unresolved: 1},
+		Updates: []Update{
+			{Candidate: Candidate{Name: "keep", Manager: ManagerGoMod}, LatestVersion: "v2.0.0", UpdateType: "major", Status: "outdated"},
+			{Candidate: Candidate{Name: "drop", Manager: ManagerGoMod}, Status: "current"},
+			{Candidate: Candidate{Name: "keep-unresolved", Manager: ManagerCustom}, Status: "unresolved", Error: "offline"},
+		},
+	}
+	filtered := FilterReport(report, func(entry Update) bool { return strings.HasPrefix(entry.Name, "keep") })
+	if len(filtered.Updates) != 2 || filtered.Summary != (Summary{Detected: 2, Outdated: 1, Unresolved: 1}) {
+		t.Fatalf("filtered=%+v", filtered)
+	}
+	if filtered.PlanDigest == "" || filtered.PlanDigest == report.PlanDigest {
+		t.Fatalf("digest=%q", filtered.PlanDigest)
+	}
+	if len(report.Updates) != 3 || report.PlanDigest != "original" {
+		t.Fatalf("source report mutated: %+v", report)
 	}
 }

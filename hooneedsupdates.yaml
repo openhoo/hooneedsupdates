@@ -14,7 +14,38 @@ allowedUpdateTypes:
   - major
 concurrency: 8
 requestTimeout: 15s
+lockfileTimeout: 5m
 includePrereleases: false
+automation:
+  repositories:
+    - openhoo/hooneedsupdates
+    - openhoo/hooversion
+    - openhoo/hoolicy
+    - openhoo/hooray
+    - openhoo/hoonarqube
+    - openhoo/hoocloak
+    - openhoo/hoomail
+    - openhoo/hoosharper
+  branchPrefix: hooneedsupdates
+  labels: []
+  lockfiles: true
+  draft: false
+  selection:
+    managers: [github-actions, custom]
+    dependencies:
+      - '^openhoo/(hooneedsupdates|hooversion|hoolicy|hooray|hoonarqube|hoocloak|hoomail|hoosharper)$'
+  autoMerge:
+    enabled: true
+    updateTypes: [patch, minor]
+    managers: [github-actions, custom]
+    dependencies:
+      - '^openhoo/(hooneedsupdates|hooversion|hoolicy|hooray|hoonarqube|hoocloak|hoomail|hoosharper)$'
+    maxUpdates: 50
+    requireLockfiles: true
+  mergeMethod: squash
+  closeStale: true
+  commitAuthor: HooNeedsUpdates Bot
+  commitEmail: hooneedsupdates[bot]@users.noreply.github.com
 customManagers:
   - name: hooversion-version
     datasource: github-releases

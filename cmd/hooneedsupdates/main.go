@@ -18,6 +18,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/openhoo/hooneedsupdates/internal/automation"
 	"github.com/openhoo/hooneedsupdates/internal/config"
 	"github.com/openhoo/hooneedsupdates/internal/update"
 )
@@ -41,6 +42,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runScan(ctx, args[1:], stdout, stderr)
 	case "apply":
 		return runApply(ctx, args[1:], stdout, stderr)
+	case "update-repos":
+		return runUpdateRepos(ctx, args[1:], stdout, stderr)
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "version", "--version", "-version":
@@ -54,6 +57,131 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		printHelp(stderr)
 		return 2
 	}
+}
+
+func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("update-repos", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "fleet configuration file")
+	format := flags.String("format", "table", "table or json")
+	write := flags.Bool("write", false, "push managed branches and create, update, or close pull requests")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *format != "table" && *format != "json" {
+		fmt.Fprintf(stderr, "unknown format %q\n", *format)
+		return 2
+	}
+	root, err := filepath.Abs(".")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	cfg, _, err := config.Load(root, *configPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	repositories := flags.Args()
+	if len(repositories) == 0 {
+		repositories = cfg.Automation.Repositories
+	} else {
+		cfg.Automation.Repositories = append([]string(nil), repositories...)
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+	}
+	if len(repositories) == 0 {
+		fmt.Fprintln(stderr, "update-repos requires owner/repository arguments or automation.repositories")
+		return 2
+	}
+	token := os.Getenv("GH_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	timeout, err := time.ParseDuration(cfg.RequestTimeout)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	runner, err := automation.New(automation.Options{
+		Settings:   cfg.Automation,
+		Token:      token,
+		APIURL:     os.Getenv("GITHUB_API_URL"),
+		GraphQLURL: os.Getenv("GITHUB_GRAPHQL_URL"),
+		Write:      *write,
+		HTTPClient: &http.Client{Timeout: timeout},
+		Updater: func(ctx context.Context, root string, lockfiles bool) (update.Report, []update.AppliedFile, error) {
+			return updateRepository(ctx, root, lockfiles, cfg.Automation.Selection)
+		},
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	results := runner.Run(ctx, repositories)
+	switch *format {
+	case "json":
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(results); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	case "table":
+		printAutomationTable(stdout, results)
+	}
+	for _, result := range results {
+		if result.Error != "" {
+			return 1
+		}
+	}
+	return 0
+}
+
+func updateRepository(
+	ctx context.Context,
+	root string,
+	lockfiles bool,
+	selection config.Selection,
+) (update.Report, []update.AppliedFile, error) {
+	report, cfg, err := scan(ctx, root, "")
+	if err != nil {
+		return update.Report{}, nil, err
+	}
+	report = automation.SelectReport(report, selection)
+	if report.Summary.Unresolved > 0 {
+		return report, nil, nil
+	}
+	if lockfiles {
+		timeout, err := time.ParseDuration(cfg.LockfileTimeout)
+		if err != nil {
+			return report, nil, err
+		}
+		files, err := update.ApplyWithLockfiles(ctx, root, report, true, timeout)
+		return report, files, err
+	}
+	files, err := update.Apply(root, report, true)
+	return report, files, err
+}
+
+func printAutomationTable(output io.Writer, results []automation.Result) {
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "REPOSITORY\tACTION\tOUTDATED\tFILES\tAUTO-MERGE\tPULL REQUEST")
+	for _, result := range results {
+		autoMerge := result.AutoMergeAction
+		if autoMerge == "" {
+			autoMerge = result.AutoMergeReason
+		}
+		pull := result.PullRequestURL
+		if result.Error != "" {
+			pull = result.Error
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%d\t%d\t%s\t%s\n",
+			result.Repository, result.Action, result.Outdated, result.Files, autoMerge, pull)
+	}
+	_ = writer.Flush()
 }
 
 func reportedVersion() string {
@@ -273,6 +401,7 @@ func printHelp(output io.Writer) {
 	commands := []string{
 		"scan [path]   Resolve and report dependency updates",
 		"apply [path]  Preview edits; --lockfiles verifies lockfiles; --write applies them",
+		"update-repos [owner/repository ...]  Preview fleet PRs; --write reconciles them",
 		"init [path]   Create strict starter configuration",
 		"version       Print version",
 	}
@@ -305,6 +434,27 @@ concurrency: 8
 requestTimeout: 15s
 lockfileTimeout: 5m
 includePrereleases: false
+automation:
+  repositories: []
+  branchPrefix: hooneedsupdates
+  labels: []
+  lockfiles: true
+  draft: false
+  selection:
+    updateTypes: []
+    managers: []
+    dependencies: []
+  autoMerge:
+    enabled: false
+    updateTypes: [patch, minor]
+    managers: []
+    dependencies: []
+    maxUpdates: 20
+    requireLockfiles: true
+  mergeMethod: squash
+  closeStale: true
+  commitAuthor: HooNeedsUpdates Bot
+  commitEmail: hooneedsupdates[bot]@users.noreply.github.com
 customManagers:
   - name: hooversion-version
     datasource: github-releases
