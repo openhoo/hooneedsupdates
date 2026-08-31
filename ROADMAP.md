@@ -38,9 +38,9 @@ atomic and individually reviewable.
 
 ## v0.4 - GitHub pull-request lifecycle
 
-Status: core lifecycle implemented in Unreleased. GitHub App installation tokens
-are consumed through the bundled scheduled workflow; resumable API rate-limit
-state remains outstanding.
+Status: implemented in the current source tree. GitHub App installation tokens
+are consumed through the bundled scheduled workflow; bounded API backoff
+persists cooldown state across workflow runs.
 
 - [x] GitHub App installation-token authentication and least-privilege
   repository selection.
@@ -48,7 +48,7 @@ state remains outstanding.
   stale-plan closure.
 - [x] Native GitHub auto-merge behind exact content policy; repository checks,
   reviews, and rules remain authoritative and auto-merge defaults to disabled.
-- Rate-limit and abuse-limit backoff with resumable state.
+- [x] Rate-limit and abuse-limit backoff with resumable state.
 
 Exit: repeated runs converge without duplicate PRs or bypassing branch rules.
 

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 )
@@ -22,14 +23,15 @@ type Resolver interface {
 }
 
 type HTTPResolver struct {
-	Client      *http.Client
-	Token       string
-	GitHubAPI   string
-	GoProxy     string
-	CratesAPI   string
-	NPMRegistry string
-	NuGetAPI    string
-	DockerHub   string
+	Client       *http.Client
+	GitHubClient *githubapi.Client
+	Token        string
+	GitHubAPI    string
+	GoProxy      string
+	CratesAPI    string
+	NPMRegistry  string
+	NuGetAPI     string
+	DockerHub    string
 }
 
 func NewHTTPResolver(client *http.Client) *HTTPResolver {
@@ -362,7 +364,12 @@ func (r *HTTPResolver) get(ctx context.Context, endpoint string, github bool) ([
 			request.Header.Set("Authorization", "Bearer "+r.Token)
 		}
 	}
-	response, err := r.Client.Do(request)
+	var response *http.Response
+	if github && r.GitHubClient != nil {
+		response, err = r.GitHubClient.Do(ctx, request)
+	} else {
+		response, err = r.Client.Do(request)
+	}
 	if err != nil {
 		return nil, err
 	}

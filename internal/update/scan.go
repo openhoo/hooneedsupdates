@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 )
 
 type Scanner struct {
@@ -43,6 +45,8 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 	var workers sync.WaitGroup
 	cache := map[string]*resolutionResult{}
 	var cacheMu sync.Mutex
+	var fatalErr error
+	var fatalMu sync.Mutex
 	resolveCached := func(candidate Candidate) (Resolution, error) {
 		key := strings.Join([]string{candidate.Datasource, candidate.Name, candidate.CurrentVersion}, "\x00")
 		cacheMu.Lock()
@@ -77,6 +81,15 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 				}
 				resolution, resolveErr := resolveCached(candidate)
 				if resolveErr != nil {
+					var limited *githubapi.RateLimitError
+					if errors.As(resolveErr, &limited) {
+						fatalMu.Lock()
+						if fatalErr == nil || limited.RetryAt.After(rateLimitRetryAt(fatalErr)) {
+							fatalErr = resolveErr
+						}
+						fatalMu.Unlock()
+						continue
+					}
 					updates[task.index] = Update{Candidate: candidate, Status: "unresolved", Error: resolveErr.Error()}
 					continue
 				}
@@ -89,6 +102,9 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 	}
 	close(jobs)
 	workers.Wait()
+	if fatalErr != nil {
+		return Report{}, fatalErr
+	}
 
 	sort.SliceStable(updates, func(i, j int) bool {
 		if updates[i].Status != updates[j].Status {
@@ -125,6 +141,14 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 		}
 	}
 	return report, nil
+}
+
+func rateLimitRetryAt(err error) time.Time {
+	var limited *githubapi.RateLimitError
+	if errors.As(err, &limited) {
+		return limited.RetryAt
+	}
+	return time.Time{}
 }
 
 // FilterReport returns a new, internally consistent report containing only

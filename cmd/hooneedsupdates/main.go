@@ -20,6 +20,7 @@ import (
 
 	"github.com/openhoo/hooneedsupdates/internal/automation"
 	"github.com/openhoo/hooneedsupdates/internal/config"
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 	"github.com/openhoo/hooneedsupdates/internal/update"
 )
 
@@ -77,7 +78,7 @@ func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	cfg, _, err := config.Load(root, *configPath)
+	cfg, loadedConfigPath, err := config.Load(root, *configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -105,6 +106,14 @@ func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	stateFile := cfg.Automation.RateLimit.StateFile
+	if stateFile != "" && !filepath.IsAbs(stateFile) {
+		stateRoot := root
+		if loadedConfigPath != "" {
+			stateRoot = filepath.Dir(loadedConfigPath)
+		}
+		stateFile = filepath.Join(stateRoot, stateFile)
+	}
 	runner, err := automation.New(automation.Options{
 		Settings:   cfg.Automation,
 		Token:      token,
@@ -112,8 +121,9 @@ func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer
 		GraphQLURL: os.Getenv("GITHUB_GRAPHQL_URL"),
 		Write:      *write,
 		HTTPClient: &http.Client{Timeout: timeout},
-		Updater: func(ctx context.Context, root string, lockfiles bool) (update.Report, []update.AppliedFile, error) {
-			return updateRepository(ctx, root, lockfiles, cfg.Automation.Selection)
+		StateFile:  stateFile,
+		Updater: func(ctx context.Context, root string, lockfiles bool, github *githubapi.Client) (update.Report, []update.AppliedFile, error) {
+			return updateRepository(ctx, root, lockfiles, cfg.Automation.Selection, github)
 		},
 	})
 	if err != nil {
@@ -145,8 +155,9 @@ func updateRepository(
 	root string,
 	lockfiles bool,
 	selection config.Selection,
+	github *githubapi.Client,
 ) (update.Report, []update.AppliedFile, error) {
-	report, cfg, err := scan(ctx, root, "")
+	report, cfg, err := scanWithGitHubClient(ctx, root, "", github)
 	if err != nil {
 		return update.Report{}, nil, err
 	}
@@ -175,6 +186,9 @@ func printAutomationTable(output io.Writer, results []automation.Result) {
 			autoMerge = result.AutoMergeReason
 		}
 		pull := result.PullRequestURL
+		if result.Action == "deferred" {
+			pull = result.DeferralReason + "; retry at " + result.RetryAt
+		}
 		if result.Error != "" {
 			pull = result.Error
 		}
@@ -330,6 +344,14 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 }
 
 func scan(ctx context.Context, root, configPath string) (update.Report, config.Config, error) {
+	return scanWithGitHubClient(ctx, root, configPath, nil)
+}
+
+func scanWithGitHubClient(
+	ctx context.Context,
+	root, configPath string,
+	github *githubapi.Client,
+) (update.Report, config.Config, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return update.Report{}, config.Config{}, err
@@ -343,7 +365,12 @@ func scan(ctx context.Context, root, configPath string) (update.Report, config.C
 		return update.Report{}, config.Config{}, fmt.Errorf("invalid requestTimeout: %w", err)
 	}
 	client := &http.Client{Timeout: timeout}
-	report, err := (update.Scanner{Config: cfg, Resolver: update.NewHTTPResolver(client)}).Scan(ctx, absRoot)
+	resolver := update.NewHTTPResolver(client)
+	resolver.GitHubClient = github
+	if endpoint := os.Getenv("GITHUB_API_URL"); endpoint != "" {
+		resolver.GitHubAPI = endpoint
+	}
+	report, err := (update.Scanner{Config: cfg, Resolver: resolver}).Scan(ctx, absRoot)
 	return report, cfg, err
 }
 
@@ -451,6 +478,10 @@ automation:
     dependencies: []
     maxUpdates: 20
     requireLockfiles: true
+  rateLimit:
+    stateFile: ''
+    maxRetries: 2
+    maxWait: 30s
   mergeMethod: squash
   closeStale: true
   commitAuthor: HooNeedsUpdates Bot

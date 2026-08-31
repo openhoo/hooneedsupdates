@@ -124,6 +124,10 @@ automation:
     dependencies: ['^openhoo/']
     maxUpdates: 10
     requireLockfiles: true
+  rateLimit:
+    stateFile: .hooneedsupdates/rate-limit.json
+    maxRetries: 2
+    maxWait: 30s
   mergeMethod: squash
   closeStale: true
 ignore:
@@ -142,8 +146,10 @@ customManagers:
 Configuration rejects unknown fields, invalid regular expressions, unknown
 managers, unreasoned ignores, and custom matchers without a named
 `currentValue` capture. Auto-merge is rejected for draft PRs or unsafe policy
-values. See [repository automation](docs/repository-automation.md) for exact PR
-lifecycle, authentication, policy, and recovery behavior.
+values. Fleet runs persist GitHub cooldowns when `rateLimit.stateFile` is set;
+longer waits return `deferred` results without failing the scheduled run. See
+[repository automation](docs/repository-automation.md) for exact PR lifecycle,
+authentication, retry policy, and recovery behavior.
 
 ## GitHub Actions
 
@@ -180,6 +186,8 @@ ID and private-key secret are configured.
 - No updater configuration can run shell commands.
 - Fleet writes require an explicit `--write` and a token; preview remains
   remote-read-only.
+- GitHub REST, GraphQL, and release-resolution requests share bounded retries;
+  longer primary or secondary rate-limit cooldowns persist atomically.
 - Managed branches use exact-SHA force-with-lease and are never overwritten
   without matching PR ownership evidence.
 - Any unexpected changed path, unresolved dependency, or non-reproducible
@@ -195,8 +203,8 @@ Report vulnerabilities through [GitHub private vulnerability reporting](https://
 
 Current source tree implements deterministic inventory, reviewed manifest edits,
 reproducible Go, Cargo, Bun/npm, and static NuGet lockfile changes, plus the
-idempotent GitHub update-PR lifecycle. Grouped update families, minimum-age
-policy, resumable rate-limit state, GitLab automation, and organization-wide
+idempotent GitHub update-PR lifecycle with resumable rate-limit state. Grouped
+update families, minimum-age policy, GitLab automation, and organization-wide
 dashboards remain tracked in [ROADMAP.md](ROADMAP.md).
 
 The Hoostack alignment review that led to this project is recorded in

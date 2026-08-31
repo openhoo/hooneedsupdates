@@ -8,8 +8,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 	"github.com/openhoo/hooneedsupdates/internal/update"
 )
 
@@ -35,7 +37,17 @@ func New(options Options) (*Runner, error) {
 	if options.Write && options.Token == "" {
 		return nil, errors.New("GH_TOKEN or GITHUB_TOKEN is required with --write")
 	}
-	host, err := newGitHubHost(options.HTTPClient, options.APIURL, options.GraphQLURL, options.Token)
+	maxWait, err := time.ParseDuration(options.Settings.RateLimit.MaxWait)
+	if err != nil {
+		return nil, fmt.Errorf("parse automation.rateLimit.maxWait: %w", err)
+	}
+	github, err := githubapi.New(options.HTTPClient, options.APIURL, githubapi.Options{
+		StateFile: options.StateFile, MaxRetries: options.Settings.RateLimit.MaxRetries, MaxWait: maxWait,
+	})
+	if err != nil {
+		return nil, err
+	}
+	host, err := newGitHubHostWithClient(github, options.APIURL, options.GraphQLURL, options.Token)
 	if err != nil {
 		return nil, err
 	}
@@ -45,18 +57,29 @@ func New(options Options) (*Runner, error) {
 		host:     host,
 		vcs:      gitVCS{token: options.Token},
 		updater:  options.Updater,
+		github:   github,
 	}, nil
 }
 
 func (r *Runner) Run(ctx context.Context, repositories []string) []Result {
 	repositories = uniqueRepositories(repositories)
 	results := make([]Result, 0, len(repositories))
-	for _, name := range repositories {
+	for index, name := range repositories {
 		if err := ctx.Err(); err != nil {
 			results = append(results, Result{Repository: name, Action: "failed", Error: err.Error()})
 			continue
 		}
-		results = append(results, r.runRepository(ctx, name))
+		result := r.runRepository(ctx, name)
+		results = append(results, result)
+		if result.Action == "deferred" {
+			for _, remaining := range repositories[index+1:] {
+				results = append(results, Result{
+					Repository: remaining, Action: "deferred", RetryAt: result.RetryAt,
+					DeferralReason: result.DeferralReason,
+				})
+			}
+			break
+		}
 	}
 	return results
 }
@@ -74,8 +97,7 @@ func (r *Runner) runRepository(ctx context.Context, name string) (result Result)
 		defer cleanup()
 	}
 	if err != nil {
-		result.Error = err.Error()
-		return result
+		return operationalError(result, err)
 	}
 	result = state.result
 	if state.report.Summary.Unresolved > 0 {
@@ -83,8 +105,7 @@ func (r *Runner) runRepository(ctx context.Context, name string) (result Result)
 		return result
 	}
 	if err := r.loadManagedState(ctx, state); err != nil {
-		result.Error = err.Error()
-		return result
+		return operationalError(result, err)
 	}
 	if state.report.Summary.Outdated == 0 {
 		return r.handleCurrent(ctx, result, name, state.openPull, state.branchOwned, state.branchExists)
@@ -119,7 +140,7 @@ func (r *Runner) prepareRepository(
 	if err != nil {
 		return nil, cleanup, err
 	}
-	report, files, err := r.updater(ctx, checkout, r.settings.Lockfiles)
+	report, files, err := r.updater(ctx, checkout, r.settings.Lockfiles, r.github)
 	if err != nil {
 		return nil, cleanup, err
 	}
@@ -171,8 +192,7 @@ func (r *Runner) handleUpdates(ctx context.Context, state *repositoryState) Resu
 		ctx, state.checkout, message, r.settings.CommitAuthor, r.settings.CommitEmail, state.files,
 	)
 	if err != nil {
-		result.Error = err.Error()
-		return result
+		return operationalError(result, err)
 	}
 	result.HeadSHA = headSHA
 	result.Files = len(changedPaths)
@@ -215,8 +235,7 @@ func (r *Runner) writeUpdate(
 ) Result {
 	preDisabled, err := r.disableUnsafeAutoMerge(ctx, state.openPull, result.AutoMergeEligible)
 	if err != nil {
-		result.Error = err.Error()
-		return result
+		return operationalError(result, err)
 	}
 	branchChanged := !state.branchExists || state.remoteSHA != result.HeadSHA
 	if branchChanged {
@@ -225,26 +244,23 @@ func (r *Runner) writeUpdate(
 			lease = state.remoteSHA
 		}
 		if err := r.vcs.Push(ctx, state.checkout, result.Branch, lease); err != nil {
-			result.Error = err.Error()
-			return result
+			return operationalError(result, err)
 		}
 	}
 	pull, action, err := r.upsertPull(ctx, state, body, branchChanged)
 	result.Action = action
 	if err != nil {
-		result.Error = err.Error()
-		return result
+		return operationalError(result, err)
 	}
 	if preDisabled {
 		pull.AutoMerge = nil
 	}
 	setPullResult(&result, pull)
 	if err := r.host.AddLabels(ctx, state.name, pull.Number, r.settings.Labels); err != nil {
-		result.Error = err.Error()
-		return result
+		return operationalError(result, err)
 	}
 	if err := r.reconcileAutoMerge(ctx, &result, pull, preDisabled); err != nil {
-		result.Error = err.Error()
+		return operationalError(result, err)
 	}
 	return result
 }
@@ -338,20 +354,30 @@ func (r *Runner) handleCurrent(
 	}
 	if pull != nil {
 		if err := r.host.ClosePull(ctx, name, pull.Number); err != nil {
-			result.Action = "failed"
-			result.Error = err.Error()
-			return result
+			return operationalError(result, err)
 		}
 		setPullResult(&result, *pull)
 	}
 	if branchExists {
 		if err := r.host.DeleteRef(ctx, name, result.Branch); err != nil {
-			result.Action = "failed"
-			result.Error = err.Error()
-			return result
+			return operationalError(result, err)
 		}
 	}
 	result.Action = "closed"
+	return result
+}
+
+func operationalError(result Result, err error) Result {
+	var limited *githubapi.RateLimitError
+	if errors.As(err, &limited) {
+		result.Action = "deferred"
+		result.Error = ""
+		result.RetryAt = limited.RetryAt.UTC().Format(time.RFC3339)
+		result.DeferralReason = "GitHub " + limited.Kind + " rate limit"
+		return result
+	}
+	result.Action = "failed"
+	result.Error = err.Error()
 	return result
 }
 

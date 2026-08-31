@@ -60,6 +60,15 @@ jobs:
         if: steps.configured.outputs.value == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Restore GitHub rate-limit state
+        if: steps.configured.outputs.value == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .hooneedsupdates/rate-limit.json
+          key: hooneedsupdates-rate-limit-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            hooneedsupdates-rate-limit-${{ runner.os }}-
+
       - name: Set up Go
         if: steps.configured.outputs.value == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -72,3 +81,13 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: go run ./cmd/hooneedsupdates update-repos --write --format json
+
+      - name: Save GitHub rate-limit state
+        if: >-
+          always() &&
+          steps.configured.outputs.value == 'true' &&
+          hashFiles('.hooneedsupdates/rate-limit.json') != ''
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .hooneedsupdates/rate-limit.json
+          key: hooneedsupdates-rate-limit-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
