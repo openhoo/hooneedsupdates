@@ -579,10 +579,8 @@ func repositoryRoot(root string) (string, error) {
 }
 
 func validateSourceState(root string, plan regenerationPlan) error {
-	if output, err := runGit(context.Background(), root, "", "config", "--show-origin", "--get-regexp", `^filter\..*\.(clean|smudge|process)$`); err == nil {
-		return fmt.Errorf("Git content filters are not allowed in lockfile mode: %s", strings.TrimSpace(string(output)))
-	} else if !exitCodeIs(err, 1) {
-		return fmt.Errorf("inspect Git content filters: %w", err)
+	if err := rejectRepositoryGitContentFilters(root); err != nil {
+		return err
 	}
 	if err := rejectCargoProjectConfig(root, plan.groups); err != nil {
 		return err
@@ -618,6 +616,26 @@ func validateSourceState(root string, plan regenerationPlan) error {
 			return errors.New("planned manifests or lockfiles have uncommitted changes")
 		}
 		return fmt.Errorf("inspect planned files: %w", err)
+	}
+	return nil
+}
+
+func rejectRepositoryGitContentFilters(root string) error {
+	scopes := []string{"--local"}
+	worktreeConfig, err := runGit(context.Background(), root, "", "config", "--local", "--bool", "--get", "extensions.worktreeConfig")
+	if err == nil && strings.TrimSpace(string(worktreeConfig)) == "true" {
+		scopes = append(scopes, "--worktree")
+	} else if err != nil && !exitCodeIs(err, 1) {
+		return fmt.Errorf("inspect Git worktree configuration: %w", err)
+	}
+	for _, scope := range scopes {
+		output, err := runGit(context.Background(), root, "", "config", scope, "--show-origin", "--get-regexp", `^filter\..*\.(clean|smudge|process)$`)
+		if err == nil {
+			return fmt.Errorf("Git content filters are not allowed in repository configuration: %s", strings.TrimSpace(string(output)))
+		}
+		if !exitCodeIs(err, 1) {
+			return fmt.Errorf("inspect Git content filters: %w", err)
+		}
 	}
 	return nil
 }

@@ -212,6 +212,25 @@ func TestApplyWithLockfilesRejectsGitContentFilters(t *testing.T) {
 	}
 }
 
+func TestApplyWithLockfilesAllowsHostGitContentFilters(t *testing.T) {
+	root := gitFixture(t, map[string]string{
+		"go.mod": "module example.com/demo\n\ngo 1.26\n\nrequire example.com/dependency v1.0.0\n",
+		"go.sum": "before\n",
+	})
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(globalConfig, []byte("[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	report := fixtureReport(t, root, "go.mod", ManagerGoMod, "example.com/dependency", "v1.0.0", "v1.1.0")
+	runner := &fakeLockRunner{run: func(_ int, command lockCommand) error {
+		return os.WriteFile(filepath.Join(command.dir, "go.sum"), []byte("stable\n"), 0o644)
+	}}
+	if _, err := applyWithLockfiles(context.Background(), root, report, false, time.Second, runner); err != nil {
+		t.Fatalf("host content filter rejected: %v", err)
+	}
+}
+
 func TestApplyWithLockfilesRejectsRepositoryCargoConfiguration(t *testing.T) {
 	root := gitFixture(t, map[string]string{
 		"Cargo.toml":         "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nitoa = \"1.0.14\"\n",
