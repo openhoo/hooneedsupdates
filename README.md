@@ -44,6 +44,11 @@ Download a release archive and verify it against `SHA256SUMS`, or install with G
 go install github.com/openhoo/hooneedsupdates/cmd/hooneedsupdates@v0.1.1
 ```
 
+Successful non-release CI on `main` now runs Hooversion automatically. The
+version workflow creates the release commit and immutable tag, then dispatches
+the signed release workflow for that exact tag. Manual version runs default to
+dry-run; existing-tag rebuilds remain explicit in the release workflow.
+
 Container:
 
 ```sh

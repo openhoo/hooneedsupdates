@@ -1,0 +1,30 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: &weekly
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /
+    schedule: *weekly
+    groups:
+      container-images:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: *weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
