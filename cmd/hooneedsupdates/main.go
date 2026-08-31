@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 )
 
 var version = "dev"
+var readBuildInfo = debug.ReadBuildInfo
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -42,7 +44,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "version", "--version", "-version":
-		fmt.Fprintf(stdout, "hooneedsupdates %s\n", version)
+		fmt.Fprintf(stdout, "hooneedsupdates %s\n", reportedVersion())
 		return 0
 	case "help", "--help", "-h":
 		printHelp(stdout)
@@ -52,6 +54,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		printHelp(stderr)
 		return 2
 	}
+}
+
+func reportedVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := readBuildInfo()
+	if !ok || info == nil {
+		return version
+	}
+	moduleVersion := strings.TrimPrefix(info.Main.Version, "v")
+	if moduleVersion == "" || moduleVersion == "(devel)" {
+		return version
+	}
+	return moduleVersion
 }
 
 func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
