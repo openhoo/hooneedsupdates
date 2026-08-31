@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 )
 
 const maxGitHubResponse = 8 << 20
@@ -17,15 +19,23 @@ const maxGitHubResponse = 8 << 20
 var errNotFound = errors.New("GitHub resource not found")
 
 type githubHost struct {
-	client     *http.Client
+	client     *githubapi.Client
 	apiURL     string
 	graphqlURL string
 	token      string
 }
 
 func newGitHubHost(client *http.Client, apiURL, graphqlURL, token string) (*githubHost, error) {
+	github, err := githubapi.New(client, apiURL, githubapi.Options{})
+	if err != nil {
+		return nil, err
+	}
+	return newGitHubHostWithClient(github, apiURL, graphqlURL, token)
+}
+
+func newGitHubHostWithClient(client *githubapi.Client, apiURL, graphqlURL, token string) (*githubHost, error) {
 	if client == nil {
-		client = http.DefaultClient
+		return nil, errors.New("GitHub API client is required")
 	}
 	apiURL = strings.TrimRight(apiURL, "/")
 	if apiURL == "" {
@@ -192,7 +202,7 @@ func (g *githubHost) request(ctx context.Context, method, endpoint string, input
 	if g.token != "" {
 		request.Header.Set("Authorization", "Bearer "+g.token)
 	}
-	response, err := g.client.Do(request)
+	response, err := g.client.Do(ctx, request)
 	if err != nil {
 		return err
 	}

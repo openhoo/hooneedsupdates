@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 	"github.com/openhoo/hooneedsupdates/internal/update"
 )
 
@@ -17,10 +18,11 @@ type Options struct {
 	GraphQLURL string
 	Write      bool
 	HTTPClient *http.Client
+	StateFile  string
 	Updater    Updater
 }
 
-type Updater func(context.Context, string, bool) (update.Report, []update.AppliedFile, error)
+type Updater func(context.Context, string, bool, *githubapi.Client) (update.Report, []update.AppliedFile, error)
 
 type Result struct {
 	Repository        string `json:"repository"`
@@ -37,6 +39,8 @@ type Result struct {
 	AutoMergeEligible bool   `json:"autoMergeEligible"`
 	AutoMergeReason   string `json:"autoMergeReason,omitempty"`
 	AutoMergeAction   string `json:"autoMergeAction,omitempty"`
+	RetryAt           string `json:"retryAt,omitempty"`
+	DeferralReason    string `json:"deferralReason,omitempty"`
 	Error             string `json:"error,omitempty"`
 }
 
@@ -97,4 +101,5 @@ type Runner struct {
 	host     host
 	vcs      vcs
 	updater  Updater
+	github   *githubapi.Client
 }

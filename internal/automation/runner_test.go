@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 	"github.com/openhoo/hooneedsupdates/internal/update"
 )
 
@@ -88,7 +90,7 @@ func TestRunnerFailsClosedForUnresolvedOrUnownedBranch(t *testing.T) {
 	t.Run("unresolved", func(t *testing.T) {
 		host := fixtureHost()
 		vcs := &fakeVCS{baseSHA: strings.Repeat("a", 40), headSHA: strings.Repeat("b", 40)}
-		updater := func(context.Context, string, bool) (update.Report, []update.AppliedFile, error) {
+		updater := func(context.Context, string, bool, *githubapi.Client) (update.Report, []update.AppliedFile, error) {
 			return update.Report{Summary: update.Summary{Outdated: 1, Unresolved: 1}}, nil, nil
 		}
 		result := fixtureRunner(host, vcs, updater, true).Run(context.Background(), []string{"openhoo/tool"})[0]
@@ -132,13 +134,37 @@ func TestRunnerClosesStaleManagedPRAndBranch(t *testing.T) {
 	host.refExists = true
 	host.refSHA = open.Head.SHA
 	vcs := &fakeVCS{baseSHA: strings.Repeat("a", 40)}
-	updater := func(context.Context, string, bool) (update.Report, []update.AppliedFile, error) {
+	updater := func(context.Context, string, bool, *githubapi.Client) (update.Report, []update.AppliedFile, error) {
 		return update.Report{PlanDigest: "sha256:current"}, nil, nil
 	}
 
 	result := fixtureRunner(host, vcs, updater, true).Run(context.Background(), []string{"openhoo/tool"})[0]
 	if result.Error != "" || result.Action != "closed" || host.closeCalls != 1 || host.deleteCalls != 1 {
 		t.Fatalf("stale lifecycle failed: result=%+v host=%+v", result, host)
+	}
+}
+
+func TestRunnerDefersRemainingFleetOnGitHubRateLimit(t *testing.T) {
+	retryAt := time.Date(2026, 8, 31, 13, 0, 0, 0, time.UTC)
+	host := fixtureHost()
+	host.repositoryErr = &githubapi.RateLimitError{
+		Kind: "secondary", RetryAt: retryAt, Attempts: 2, Persisted: true,
+	}
+	runner := fixtureRunner(
+		host,
+		&fakeVCS{baseSHA: strings.Repeat("a", 40), headSHA: strings.Repeat("b", 40)},
+		fixtureUpdate("patch"),
+		true,
+	)
+	results := runner.Run(context.Background(), []string{"openhoo/one", "openhoo/two", "openhoo/three"})
+	if len(results) != 3 || host.repositoryCalls != 1 {
+		t.Fatalf("results=%+v repository calls=%d", results, host.repositoryCalls)
+	}
+	for _, result := range results {
+		if result.Action != "deferred" || result.Error != "" || result.RetryAt != retryAt.Format(time.RFC3339) ||
+			result.DeferralReason != "GitHub secondary rate limit" {
+			t.Fatalf("unexpected deferred result: %+v", result)
+		}
 	}
 }
 
@@ -207,7 +233,7 @@ func fixtureRunner(host *fakeHost, vcs *fakeVCS, updater Updater, write bool) *R
 }
 
 func fixtureUpdate(kind string) Updater {
-	return func(context.Context, string, bool) (update.Report, []update.AppliedFile, error) {
+	return func(context.Context, string, bool, *githubapi.Client) (update.Report, []update.AppliedFile, error) {
 		entry := reportUpdate(kind, update.ManagerGitHubActions, "openhoo/dependency")
 		return update.Report{
 			PlanDigest: "sha256:fixture",
@@ -234,10 +260,12 @@ func fixtureRepository() repository {
 }
 
 type fakeHost struct {
-	repository repository
-	pulls      []pullRequest
-	refSHA     string
-	refExists  bool
+	repository      repository
+	repositoryErr   error
+	repositoryCalls int
+	pulls           []pullRequest
+	refSHA          string
+	refExists       bool
 
 	createCalls  int
 	updateCalls  int
@@ -253,7 +281,10 @@ type fakeHost struct {
 
 func fixtureHost() *fakeHost { return &fakeHost{repository: fixtureRepository()} }
 
-func (h *fakeHost) Repository(context.Context, string) (repository, error) { return h.repository, nil }
+func (h *fakeHost) Repository(context.Context, string) (repository, error) {
+	h.repositoryCalls++
+	return h.repository, h.repositoryErr
+}
 func (h *fakeHost) Ref(context.Context, string, string) (string, bool, error) {
 	return h.refSHA, h.refExists, nil
 }

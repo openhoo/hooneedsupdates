@@ -42,6 +42,7 @@ type Automation struct {
 	Draft        bool      `yaml:"draft,omitempty"`
 	Selection    Selection `yaml:"selection,omitempty"`
 	AutoMerge    AutoMerge `yaml:"autoMerge,omitempty"`
+	RateLimit    RateLimit `yaml:"rateLimit,omitempty"`
 	MergeMethod  string    `yaml:"mergeMethod,omitempty"`
 	CloseStale   bool      `yaml:"closeStale,omitempty"`
 	CommitAuthor string    `yaml:"commitAuthor,omitempty"`
@@ -61,6 +62,12 @@ type AutoMerge struct {
 	Dependencies     []string `yaml:"dependencies,omitempty"`
 	MaxUpdates       int      `yaml:"maxUpdates,omitempty"`
 	RequireLockfiles bool     `yaml:"requireLockfiles,omitempty"`
+}
+
+type RateLimit struct {
+	StateFile  string `yaml:"stateFile,omitempty"`
+	MaxRetries int    `yaml:"maxRetries,omitempty"`
+	MaxWait    string `yaml:"maxWait,omitempty"`
 }
 
 type IgnoreRule struct {
@@ -93,6 +100,10 @@ func Default() Config {
 				UpdateTypes:      []string{"patch", "minor"},
 				MaxUpdates:       20,
 				RequireLockfiles: true,
+			},
+			RateLimit: RateLimit{
+				MaxRetries: 2,
+				MaxWait:    "30s",
 			},
 			MergeMethod:  "squash",
 			CloseStale:   true,
@@ -184,6 +195,7 @@ func (c *Config) validateAutomation() error {
 		func() error { return validateAutomationLabels(automation.Labels) },
 		func() error { return validateMergeMethod(automation.MergeMethod) },
 		func() error { return validateAutoMerge(automation) },
+		func() error { return validateRateLimit(automation.RateLimit) },
 		func() error { return validateSelection(automation.Selection) },
 		func() error { return validateAutomationIdentity(automation) },
 	}
@@ -194,6 +206,20 @@ func (c *Config) validateAutomation() error {
 	}
 	if automation.AutoMerge.Enabled && automation.Draft {
 		return errors.New("automation.autoMerge cannot be enabled for draft pull requests")
+	}
+	return nil
+}
+
+func validateRateLimit(policy RateLimit) error {
+	if policy.MaxRetries < 0 || policy.MaxRetries > 10 {
+		return errors.New("automation.rateLimit.maxRetries must be between 0 and 10")
+	}
+	maxWait, err := time.ParseDuration(policy.MaxWait)
+	if err != nil || maxWait < 0 || maxWait > 15*time.Minute {
+		return errors.New("automation.rateLimit.maxWait must be a duration between 0s and 15m")
+	}
+	if strings.ContainsRune(policy.StateFile, '\x00') {
+		return errors.New("automation.rateLimit.stateFile contains an invalid null byte")
 	}
 	return nil
 }

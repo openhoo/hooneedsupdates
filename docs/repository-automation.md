@@ -15,7 +15,8 @@ GH_TOKEN="$INSTALLATION_TOKEN" hooneedsupdates update-repos --write
 Without positional repositories, the command uses `automation.repositories`.
 `--format json` emits durable per-repository results. One repository failure does
 not stop later repositories, but the command exits non-zero when any repository
-failed.
+failed. A GitHub rate limit defers the affected and remaining repositories until
+the reported `retryAt`; this is resumable control flow and exits zero.
 
 `automation.selection` defines which dependencies belong to this PR channel:
 
@@ -110,6 +111,36 @@ Install the App only on the repositories listed in the workflow. Enable native
 auto-merge on each repository where policy-approved PRs should merge. Branch
 protection or rulesets remain the source of truth for required checks and
 reviews.
+
+## Rate-limit recovery
+
+GitHub REST, GraphQL, and GitHub release-resolution calls share one limiter:
+
+```yaml
+automation:
+  rateLimit:
+    stateFile: .hooneedsupdates/rate-limit.json
+    maxRetries: 2
+    maxWait: 30s
+```
+
+For primary limits, HooNeedsUpdates waits until `X-RateLimit-Reset`. For
+secondary limits it honors `Retry-After`; when absent, it starts at one minute
+and backs off exponentially to one hour. `maxRetries` bounds request replay and
+`maxWait` bounds total sleeping per request. Requests with bodies are retried
+only when Go can recreate the exact body.
+
+Cooldowns longer than `maxWait` are written atomically to `stateFile`, returned
+as `deferred` JSON results, and applied before any later GitHub call. Successful
+GitHub responses clear the state. The bundled workflow restores and saves this
+ignored file through a branch-scoped Actions cache, so a later schedule or
+release dispatch resumes without probing GitHub early. The state contains no
+token or response body.
+
+Delete the state file only to recover from a corrupt file or after independently
+confirming GitHub lifted the limit. Do not share one state file between
+concurrent processes. An ordinary 403 permission failure remains an error and
+is never mislabeled as a rate limit.
 
 ## Recovery
 

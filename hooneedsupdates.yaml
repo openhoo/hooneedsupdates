@@ -42,6 +42,10 @@ automation:
       - '^openhoo/(hooneedsupdates|hooversion|hoolicy|hooray|hoonarqube|hoocloak|hoomail|hoosharper)$'
     maxUpdates: 50
     requireLockfiles: true
+  rateLimit:
+    stateFile: .hooneedsupdates/rate-limit.json
+    maxRetries: 2
+    maxWait: 30s
   mergeMethod: squash
   closeStale: true
   commitAuthor: HooNeedsUpdates Bot

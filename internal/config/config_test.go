@@ -68,7 +68,9 @@ func TestLoadResolvesExplicitPathAgainstRoot(t *testing.T) {
 
 func TestAutomationDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
-	if !cfg.Automation.Lockfiles || !cfg.Automation.CloseStale || cfg.Automation.AutoMerge.Enabled || cfg.Automation.MergeMethod != "squash" {
+	if !cfg.Automation.Lockfiles || !cfg.Automation.CloseStale || cfg.Automation.AutoMerge.Enabled ||
+		cfg.Automation.MergeMethod != "squash" || cfg.Automation.RateLimit.MaxRetries != 2 ||
+		cfg.Automation.RateLimit.MaxWait != "30s" {
 		t.Fatalf("unexpected automation defaults: %+v", cfg.Automation)
 	}
 
@@ -94,6 +96,23 @@ func TestAutomationDefaultsAndValidation(t *testing.T) {
 		cfg.Automation = automation
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("invalid automation accepted: %+v", automation)
+		}
+	}
+}
+
+func TestAutomationRateLimitValidation(t *testing.T) {
+	cases := []RateLimit{
+		{MaxRetries: -1, MaxWait: "30s"},
+		{MaxRetries: 11, MaxWait: "30s"},
+		{MaxRetries: 2, MaxWait: "invalid"},
+		{MaxRetries: 2, MaxWait: "16m"},
+		{MaxRetries: 2, MaxWait: "30s", StateFile: "bad\x00path"},
+	}
+	for _, policy := range cases {
+		cfg := Default()
+		cfg.Automation.RateLimit = policy
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "automation.rateLimit") {
+			t.Fatalf("invalid rate-limit policy accepted: %+v error=%v", policy, err)
 		}
 	}
 }

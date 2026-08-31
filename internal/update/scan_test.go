@@ -2,17 +2,25 @@ package update
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 )
 
 type fakeResolver struct {
 	mu    sync.Mutex
 	calls map[string]int
+}
+
+type resolverFunc func(context.Context, Candidate, bool) (Resolution, error)
+
+func (function resolverFunc) Resolve(ctx context.Context, candidate Candidate, prereleases bool) (Resolution, error) {
+	return function(ctx, candidate, prereleases)
 }
 
 func (f *fakeResolver) Resolve(_ context.Context, candidate Candidate, _ bool) (Resolution, error) {
@@ -54,6 +62,22 @@ func TestPinnedActionWithStaleCommentNeedsUpdate(t *testing.T) {
 	candidate.CurrentVersion = digest
 	if !current(candidate, resolution) {
 		t.Fatal("commentless current digest treated as outdated")
+	}
+}
+
+func TestScannerReturnsGitHubRateLimitInsteadOfUnresolvedFinding(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "package.json", `{"dependencies":{"limited":"1.0.0"}}`)
+	cfg := config.Default()
+	cfg.Managers = []string{"npm"}
+	retryAt := time.Date(2026, 8, 31, 13, 0, 0, 0, time.UTC)
+	resolver := resolverFunc(func(context.Context, Candidate, bool) (Resolution, error) {
+		return Resolution{}, &githubapi.RateLimitError{Kind: "secondary", RetryAt: retryAt}
+	})
+	_, err := (Scanner{Config: cfg, Resolver: resolver}).Scan(context.Background(), root)
+	var limited *githubapi.RateLimitError
+	if !errors.As(err, &limited) || limited.RetryAt != retryAt {
+		t.Fatalf("error=%v rate limit=%+v", err, limited)
 	}
 }
 
