@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 (2026-09-01)
+
+### Features
+
+- automate repository update pull requests (#9) (560fb44)
+- persist GitHub rate-limit backoff (#10) (c000186)
+
+### Other Changes
+
+- **ci:** update Hoostack tool pins (8464e43)
+
 ## Unreleased
 
 ### Features
