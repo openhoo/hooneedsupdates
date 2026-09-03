@@ -166,7 +166,7 @@ authentication, retry policy, and recovery behavior.
 Pin the setup action to the commit behind the desired HooNeedsUpdates release:
 
 ```yaml
-- uses: openhoo/hooneedsupdates/actions/setup@5f29337d0c39c47c691947aae0a201d2cfca8d64 # v0.3.1
+- uses: openhoo/hooneedsupdates/actions/setup@ffd31b013dafcd772bb067a0eec76f739ecd76a3 # v0.3.1
   with:
     version: 0.3.1
 - run: hooneedsupdates scan --fail-on unresolved .

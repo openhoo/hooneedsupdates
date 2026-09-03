@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  HOOVERSION_VERSION: 1.1.0
+  HOOVERSION_VERSION: 1.1.1
 
 jobs:
   commits:
@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Lint Conventional Commits
-        uses: openhoo/hooversion/actions/lint@f2186561c587b58c5ea08c74c15800cdd39eab42 # v1.1.0
+        uses: openhoo/hooversion/actions/lint@ac503b23b9b36ebbf39ee6103713c81f1f18b64d # v1.1.1
         with:
           version: ${{ env.HOOVERSION_VERSION }}
 
@@ -63,13 +63,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Enforce Hoolicy policy
-        uses: openhoo/hoolicy/actions/check@5b8cfb4339ba84edf96f84ddd66e30f4e19e7a80 # v0.3.0
+        uses: openhoo/hoolicy/actions/check@46529a99335938e7284f11099bf15f7e1800e6f5 # v0.3.1
         with:
-          version: 0.3.0
+          version: 0.3.1
       - name: Scan with Hooray
-        uses: openhoo/hooray/actions/scan@5849431da3a3fb503053d2f89282519797082074 # v0.6.4
+        uses: openhoo/hooray/actions/scan@f2b28d71398749142f4d9366b0427369f3af6e02 # v0.6.5
         with:
-          version: 0.6.4
+          version: 0.6.5
           policy: hooray-policy.yaml
           format: table
           output: ''
