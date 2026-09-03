@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
@@ -102,5 +103,151 @@ func writeFixture(t *testing.T, root, rel, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestExtractCargoConstraintsAndRenamedDependencies(t *testing.T) {
+	data := []byte(`[dependencies]
+local = { package = "actual", version = "=1.2.3" }
+other = { version = "~1.2.3", package = "other-crate" }
+prerelease = { package = "pre-crate", version = "=1.2.3-beta.1+build.7" }
+commented = { version = "1.2.3" } # package = "not-the-crate"
+string = { version = "1.2.3", features = ['fake, package = "not-the-crate"'] }
+`)
+	entries := extractCargo("Cargo.toml", data)
+	want := []struct {
+		name, value, version, prefix, suffix string
+	}{
+		{"actual", "=1.2.3", "1.2.3", "=", ""},
+		{"other-crate", "~1.2.3", "1.2.3", "~", ""},
+		{"pre-crate", "=1.2.3-beta.1+build.7", "1.2.3-beta.1+build.7", "=", ""},
+		{"commented", "1.2.3", "1.2.3", "", ""},
+		{"string", "1.2.3", "1.2.3", "", ""},
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("got %#v", entries)
+	}
+	for index, expected := range want {
+		entry := entries[index]
+		if entry.Name != expected.name || entry.CurrentValue != expected.value ||
+			entry.CurrentVersion != expected.version || entry.Prefix != expected.prefix || entry.Suffix != expected.suffix {
+			t.Errorf("entry[%d]=%+v, want name=%q value=%q version=%q prefix=%q suffix=%q",
+				index, entry, expected.name, expected.value, expected.version, expected.prefix, expected.suffix)
+		}
+	}
+}
+
+func TestExtractNPMUsesSupportedObjectOffsetsOnly(t *testing.T) {
+	data := []byte(`{"dependencies":{"same":"^1.2.3"},"config":{"same":"^1.2.3"},"devDependencies":{"same":"~1.2.3"}}`)
+	entries, err := extractNPM("package.json", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %#v", entries)
+	}
+	for _, entry := range entries {
+		if string(data[entry.Start:entry.End]) != entry.CurrentValue || entry.Name != "same" {
+			t.Fatalf("invalid entry=%+v", entry)
+		}
+	}
+}
+
+func TestExtractNPMRejectsDuplicateKeys(t *testing.T) {
+	tests := []string{
+		`{"dependencies":{"demo":"1.0.0","demo":"2.0.0"}}`,
+		`{"dependencies":{"demo":"1.0.0"},"dependencies":{"demo":"2.0.0"}}`,
+	}
+	for _, data := range tests {
+		t.Run(data, func(t *testing.T) {
+			if _, err := extractNPM("package.json", []byte(data)); err == nil ||
+				!strings.Contains(err.Error(), "duplicate package.json") {
+				t.Fatalf("extractNPM error=%v, want duplicate-key error", err)
+			}
+		})
+	}
+}
+
+func TestExtractNuGetXMLTokensPreserveActiveSpans(t *testing.T) {
+	data := []byte(`<Project><ItemGroup><PackageReference Version='1.2.3' Include='Demo' /><PackageVersion Update="Other"><Version>2.0.0</Version></PackageVersion><!-- <PackageReference Include="Commented" Version="9.9.9" /> --></ItemGroup></Project>`)
+	entries, err := extractNuGet("Directory.Packages.props", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %#v", entries)
+	}
+	if entries[0].Name != "Demo" || entries[0].CurrentValue != "1.2.3" || string(data[entries[0].Start:entries[0].End]) != "1.2.3" {
+		t.Fatalf("first entry=%+v", entries[0])
+	}
+	if entries[1].Name != "Other" || entries[1].CurrentValue != "2.0.0" || string(data[entries[1].Start:entries[1].End]) != "2.0.0" {
+		t.Fatalf("second entry=%+v", entries[1])
+	}
+}
+
+func TestExtractNuGetXMLMetadataNamesAreCaseInsensitive(t *testing.T) {
+	data := []byte(`<Project><ItemGroup><packagereference include="Demo"><version>1.2.3</version></packagereference><PackageReference Include="Other" version="2.0.0" /></ItemGroup></Project>`)
+	entries, err := extractNuGet("Directory.Packages.props", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %#v", entries)
+	}
+	for _, test := range []struct {
+		name, version string
+	}{
+		{name: "Demo", version: "1.2.3"},
+		{name: "Other", version: "2.0.0"},
+	} {
+		var found *Candidate
+		for index := range entries {
+			if entries[index].Name == test.name {
+				found = &entries[index]
+				break
+			}
+		}
+		if found == nil || found.CurrentVersion != test.version ||
+			string(data[found.Start:found.End]) != test.version {
+			t.Fatalf("entry for %s = %+v", test.name, found)
+		}
+	}
+}
+
+func TestExtractNuGetXMLVersionVariantsWithoutCandidates(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "self-closing",
+			data: `<Project><ItemGroup><PackageReference Include="empty"><Version/></PackageReference></ItemGroup></Project>`,
+		},
+		{
+			name: "self-closing with whitespace",
+			data: `<Project><ItemGroup><PackageReference Include="empty"><Version /></PackageReference></ItemGroup></Project>`,
+		},
+		{
+			name: "whitespace-only content",
+			data: "<Project><ItemGroup><PackageReference Include=\"empty\"><Version> \n\t </Version></PackageReference></ItemGroup></Project>",
+		},
+		{
+			name: "default namespace",
+			data: `<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><ItemGroup><PackageReference Include="empty"><Version/></PackageReference></ItemGroup></Project>`,
+		},
+		{
+			name: "prefixed namespace",
+			data: `<msb:Project xmlns:msb="http://schemas.microsoft.com/developer/msbuild/2003"><msb:ItemGroup><msb:PackageReference Include="empty"><msb:Version/></msb:PackageReference></msb:ItemGroup></msb:Project>`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries, err := extractNuGet("Directory.Build.props", []byte(test.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("got candidates %#v", entries)
+			}
+		})
 	}
 }

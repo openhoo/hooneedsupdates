@@ -63,7 +63,7 @@ func pinCargoManifests(worktree string, plan regenerationPlan) ([]pinnedCargoFil
 				}
 				edits = append(edits, edit{
 					start: candidate.Start, end: candidate.End, oldValue: candidate.CurrentValue,
-					replacement: "=" + candidate.CurrentValue,
+					replacement: "=" + candidate.CurrentVersion,
 				})
 				matched = true
 				break

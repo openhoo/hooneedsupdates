@@ -362,3 +362,99 @@ func assertFile(t *testing.T, root, name, contains string) {
 		t.Fatalf("%s=%q, want substring %q", name, data, contains)
 	}
 }
+func TestApplyWithLockfilesPreservesCargoConstraints(t *testing.T) {
+	const manifest = `[package]
+name = "demo"
+version = "0.1.0"
+
+[dependencies]
+exact = "=1.2.3"
+tilde = "~1.2.3"
+`
+	root := gitFixture(t, map[string]string{
+		"Cargo.toml": manifest,
+		"Cargo.lock": "before\n",
+	})
+	entries := extractCargo("Cargo.toml", []byte(manifest))
+	if len(entries) != 2 {
+		t.Fatalf("Cargo entries=%+v", entries)
+	}
+	updates := make([]Update, 0, len(entries))
+	for _, entry := range entries {
+		updates = append(updates, Update{
+			Candidate: entry, LatestVersion: "1.2.4", UpdateType: "patch", Status: "outdated",
+		})
+	}
+	report := Report{
+		SchemaVersion: 2, Root: filepath.ToSlash(root), Updates: updates,
+		PlanDigest: planDigest(updates),
+	}
+	var observed [][]byte
+	runner := &fakeLockRunner{run: func(_ int, command lockCommand) error {
+		manifestPath := filepath.Join(command.dir, "Cargo.toml")
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(data, []byte("==")) || bytes.Contains(data, []byte("=~")) {
+			return fmt.Errorf("Cargo constraints were combined: %s", data)
+		}
+		for _, candidate := range extractCargo("Cargo.toml", data) {
+			if candidate.CurrentValue != "=1.2.4" {
+				return fmt.Errorf("Cargo constraint was not temporarily pinned: %+v", candidate)
+			}
+		}
+		observed = append(observed, append([]byte(nil), data...))
+		return os.WriteFile(filepath.Join(command.dir, "Cargo.lock"), []byte("generated\n"), 0o644)
+	}}
+	files, err := applyWithLockfiles(context.Background(), root, report, true, time.Second, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAppliedPaths(t, files, "Cargo.lock", "Cargo.toml")
+	if len(observed) != 4 {
+		t.Fatalf("observed %d Cargo invocations, want 4", len(observed))
+	}
+	for _, data := range observed {
+		if !bytes.Contains(data, []byte(`exact = "=1.2.4"`)) ||
+			!bytes.Contains(data, []byte(`tilde = "=1.2.4"`)) {
+			t.Fatalf("temporary Cargo pin missing: %s", data)
+		}
+	}
+	wantManifest := strings.Replace(manifest, `exact = "=1.2.3"`, `exact = "=1.2.4"`, 1)
+	wantManifest = strings.Replace(wantManifest, `tilde = "~1.2.3"`, `tilde = "~1.2.4"`, 1)
+	if got, err := os.ReadFile(filepath.Join(root, "Cargo.toml")); err != nil || string(got) != wantManifest {
+		t.Fatalf("approved Cargo manifest mismatch: %q (%v), want %q", got, err, wantManifest)
+	}
+	assertFile(t, root, "Cargo.lock", "generated\n")
+}
+
+func TestCargoCommandUsesRenamedPackageIdentity(t *testing.T) {
+	worktree := t.TempDir()
+	commands, err := commandsForGroup(worktree, t.TempDir(), &lockfileGroup{
+		manager: ManagerCargo, directory: ".",
+		updates: []Update{{Candidate: Candidate{Name: "actual-crate", File: "Cargo.toml"}, LatestVersion: "1.2.4"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("commands=%#v", commands)
+	}
+	found := false
+	for index, argument := range commands[0].args {
+		if argument != "--package" {
+			continue
+		}
+		found = true
+		if index+1 >= len(commands[0].args) {
+			t.Fatal("--package has no value")
+		}
+		if commands[0].args[index+1] != "actual-crate" {
+			t.Fatalf("package argument=%q", commands[0].args[index+1])
+		}
+	}
+	if !found {
+		t.Fatal("Cargo command omitted --package")
+	}
+}
