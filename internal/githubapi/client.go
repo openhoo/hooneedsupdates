@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -298,7 +299,10 @@ func graphqlRateLimited(data []byte) bool {
 }
 
 func parseRetryAfter(value string, now time.Time) (time.Time, bool) {
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+	if seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil && seconds >= 0 {
+		if seconds > math.MaxInt64/int64(time.Second) {
+			seconds = math.MaxInt64 / int64(time.Second)
+		}
 		return now.Add(time.Duration(seconds) * time.Second), true
 	}
 	if parsed, err := http.ParseTime(value); err == nil {

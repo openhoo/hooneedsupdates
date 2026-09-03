@@ -9,8 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/openhoo/hooneedsupdates/internal/githubapi"
@@ -34,11 +34,7 @@ type HTTPResolver struct {
 	DockerHub    string
 }
 
-func NewHTTPResolver(client *http.Client) *HTTPResolver {
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		token = os.Getenv("GH_TOKEN")
-	}
+func NewHTTPResolver(client *http.Client, token string) *HTTPResolver {
 	return &HTTPResolver{
 		Client: client, Token: token,
 		GitHubAPI: "https://api.github.com", GoProxy: "https://proxy.golang.org",
@@ -145,14 +141,14 @@ func (r *HTTPResolver) resolveNPM(ctx context.Context, name string, includePrere
 	if err := json.Unmarshal(body, &response); err != nil {
 		return Resolution{}, err
 	}
-	if latest := response.DistTags["latest"]; latest != "" && (!strings.Contains(latest, "-") || includePrereleases) {
-		return Resolution{Version: latest}, nil
-	}
-	versions := make([]string, 0, len(response.Versions))
+	versions := make([]string, 0, len(response.Versions)+1)
 	for version := range response.Versions {
 		versions = append(versions, version)
 	}
-	return chooseVersion(versions, includePrereleases)
+	if latest := response.DistTags["latest"]; latest != "" {
+		versions = append(versions, latest)
+	}
+	return chooseVersion(versions, true)
 }
 
 func (r *HTTPResolver) resolveNuGet(ctx context.Context, name string, includePrereleases bool) (Resolution, error) {
@@ -186,37 +182,78 @@ func (r *HTTPResolver) resolveGitHub(ctx context.Context, name string, includePr
 }
 
 func (r *HTTPResolver) latestGitHubTag(ctx context.Context, name string, includePrereleases bool) (string, error) {
-	body, err := r.get(ctx, r.endpoint(r.GitHubAPI, "repos/"+name+"/releases/latest"), true)
-	if err == nil {
-		var release struct {
-			Tag string `json:"tag_name"`
+	var err error
+	if !includePrereleases {
+		body, requestErr := r.get(ctx, r.endpoint(r.GitHubAPI, "repos/"+name+"/releases/latest"), true)
+		err = requestErr
+		if err == nil {
+			var release struct {
+				Tag string `json:"tag_name"`
+			}
+			if decodeErr := json.Unmarshal(body, &release); decodeErr != nil {
+				return "", decodeErr
+			}
+			if release.Tag != "" {
+				return release.Tag, nil
+			}
 		}
-		if decodeErr := json.Unmarshal(body, &release); decodeErr != nil {
+	}
+	endpoint := r.endpoint(r.GitHubAPI, "repos/"+name+"/tags")
+	var versions []string
+	const pageSize = 100
+	const pageLimit = 100
+	for page := 1; page <= pageLimit; page++ {
+		pageURL := endpoint + "?per_page=" + strconv.Itoa(pageSize) + "&page=" + strconv.Itoa(page)
+		body, headers, tagsErr := r.getWithHeaders(ctx, pageURL, true)
+		if tagsErr != nil {
+			if err != nil {
+				return "", err
+			}
+			return "", tagsErr
+		}
+		var tags []struct {
+			Name string `json:"name"`
+		}
+		if decodeErr := json.Unmarshal(body, &tags); decodeErr != nil {
 			return "", decodeErr
 		}
-		if release.Tag != "" {
-			return release.Tag, nil
+		for _, entry := range tags {
+			versions = append(versions, entry.Name)
 		}
-	}
-	body, tagsErr := r.get(ctx, r.endpoint(r.GitHubAPI, "repos/"+name+"/tags?per_page=100"), true)
-	if tagsErr != nil {
-		if err != nil {
-			return "", err
+		if len(tags) < pageSize || githubNextLink(headers.Get("Link")) == "" {
+			break
 		}
-		return "", tagsErr
-	}
-	var tags []struct {
-		Name string `json:"name"`
-	}
-	if decodeErr := json.Unmarshal(body, &tags); decodeErr != nil {
-		return "", decodeErr
-	}
-	versions := make([]string, 0, len(tags))
-	for _, entry := range tags {
-		versions = append(versions, entry.Name)
+		if page == pageLimit {
+			return "", errors.New("GitHub tags pagination exceeds page limit")
+		}
 	}
 	chosen, chooseErr := chooseVersion(versions, includePrereleases)
 	return chosen.Version, chooseErr
+}
+
+func githubNextLink(link string) string {
+	for _, part := range strings.Split(link, ",") {
+		fields := strings.Split(part, ";")
+		if len(fields) < 2 {
+			continue
+		}
+		target := strings.TrimSpace(fields[0])
+		if !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
+			continue
+		}
+		for _, parameter := range fields[1:] {
+			key, value, ok := strings.Cut(strings.TrimSpace(parameter), "=")
+			if !ok || !strings.EqualFold(key, "rel") {
+				continue
+			}
+			for _, relation := range strings.Fields(strings.Trim(value, `"`)) {
+				if relation == "next" {
+					return strings.Trim(target, "<>")
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (r *HTTPResolver) githubTagDigest(ctx context.Context, name, tag string) (string, error) {
@@ -349,12 +386,17 @@ func chooseGoVersion(versions []string, includePrereleases bool) (Resolution, er
 }
 
 func (r *HTTPResolver) get(ctx context.Context, endpoint string, github bool) ([]byte, error) {
+	body, _, err := r.getWithHeaders(ctx, endpoint, github)
+	return body, err
+}
+
+func (r *HTTPResolver) getWithHeaders(ctx context.Context, endpoint string, github bool) ([]byte, http.Header, error) {
 	if r.Client == nil {
-		return nil, errors.New("HTTP client is required")
+		return nil, nil, errors.New("HTTP client is required")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "hooneedsupdates/0.1")
@@ -371,7 +413,7 @@ func (r *HTTPResolver) get(ctx context.Context, endpoint string, github bool) ([
 		response, err = r.Client.Do(request)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -380,16 +422,16 @@ func (r *HTTPResolver) get(ctx context.Context, endpoint string, github bool) ([
 		if body, readErr := io.ReadAll(limited); readErr == nil && len(body) > 0 {
 			message += ": " + strings.TrimSpace(string(body))
 		}
-		return nil, errors.New(message)
+		return nil, nil, errors.New(message)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, (32<<20)+1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(body) > 32<<20 {
-		return nil, errors.New("response exceeds 32 MiB limit")
+		return nil, nil, errors.New("response exceeds 32 MiB limit")
 	}
-	return body, nil
+	return body, response.Header.Clone(), nil
 }
 
 func (r *HTTPResolver) endpoint(base, path string) string {

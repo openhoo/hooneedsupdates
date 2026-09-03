@@ -103,3 +103,51 @@ func TestFilterReportRecomputesSummaryAndDigestWithoutMutatingSource(t *testing.
 		t.Fatalf("source report mutated: %+v", report)
 	}
 }
+func TestActionDigestClassificationRequiresExactResolvedDigest(t *testing.T) {
+	digest := strings.Repeat("d", 40)
+	tests := []struct {
+		name    string
+		value   string
+		version string
+		want    bool
+	}{
+		{"main branch", "@main", "v1.0.0", false},
+		{"other branch", "release", "v1.0.0", false},
+		{"abbreviated SHA", digest[:12], "v1.0.0", false},
+		{"same version mutable tag", "v1.0.0", "v1.0.0", false},
+		{"changed full SHA", strings.Repeat("e", 40), "v1.0.0", false},
+		{"equal SHA current comment", digest, "v1.0.0", true},
+		{"equal SHA no comment", digest, digest, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := Candidate{Manager: ManagerGitHubActions, CurrentValue: test.value, CurrentVersion: test.version}
+			resolution := Resolution{Version: "v1.0.0", Digest: digest}
+			if got := current(candidate, resolution); got != test.want {
+				t.Fatalf("current(%q, %q) = %v, want %v", test.value, test.version, got, test.want)
+			}
+			if !test.want && !actionDigestChanged(candidate, resolution) {
+				t.Fatalf("actionDigestChanged(%q) = false, want true", test.value)
+			}
+		})
+	}
+}
+
+func TestActionDigestDoesNotDowngradeNewerMutableTag(t *testing.T) {
+	candidate := Candidate{
+		Manager:        ManagerGitHubActions,
+		CurrentValue:   "v1.3.0",
+		CurrentVersion: "v1.3.0",
+	}
+	resolution := Resolution{
+		Version: "v1.2.0",
+		Digest:  strings.Repeat("d", 40),
+	}
+	entry := classifyResolved(config.Config{}, candidate, resolution)
+	if entry.Status != "current" {
+		t.Fatalf("status=%q, want current", entry.Status)
+	}
+	if actionDigestChanged(candidate, resolution) {
+		t.Fatal("stale digest resolution treated as an update")
+	}
+}

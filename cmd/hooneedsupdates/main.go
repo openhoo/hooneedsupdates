@@ -97,10 +97,7 @@ func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "update-repos requires owner/repository arguments or automation.repositories")
 		return 2
 	}
-	token := os.Getenv("GH_TOKEN")
-	if token == "" {
-		token = os.Getenv("GITHUB_TOKEN")
-	}
+	token := selectedGitHubToken()
 	timeout, err := time.ParseDuration(cfg.RequestTimeout)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -123,7 +120,7 @@ func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer
 		HTTPClient: &http.Client{Timeout: timeout},
 		StateFile:  stateFile,
 		Updater: func(ctx context.Context, root string, lockfiles bool, github *githubapi.Client) (update.Report, []update.AppliedFile, error) {
-			return updateRepository(ctx, root, lockfiles, cfg.Automation.Selection, github)
+			return updateRepository(ctx, root, lockfiles, cfg.Automation.Selection, github, token)
 		},
 	})
 	if err != nil {
@@ -156,8 +153,9 @@ func updateRepository(
 	lockfiles bool,
 	selection config.Selection,
 	github *githubapi.Client,
+	token string,
 ) (update.Report, []update.AppliedFile, error) {
-	report, cfg, err := scanWithGitHubClient(ctx, root, "", github)
+	report, cfg, err := scanWithGitHubClient(ctx, root, "", github, token)
 	if err != nil {
 		return update.Report{}, nil, err
 	}
@@ -221,6 +219,14 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	failOn := flags.String("fail-on", "never", "never, outdated, or unresolved")
 	showAll := flags.Bool("all", false, "include current dependencies in table output")
 	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *format != "table" && *format != "json" {
+		fmt.Fprintf(stderr, "unknown format %q\n", *format)
+		return 2
+	}
+	if *failOn != "never" && *failOn != "outdated" && *failOn != "unresolved" {
+		fmt.Fprintf(stderr, "unknown --fail-on value %q\n", *failOn)
 		return 2
 	}
 	root, ok := singleRoot(flags.Args(), stderr)
@@ -343,14 +349,22 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func selectedGitHubToken() string {
+	if token := os.Getenv("GH_TOKEN"); token != "" {
+		return token
+	}
+	return os.Getenv("GITHUB_TOKEN")
+}
+
 func scan(ctx context.Context, root, configPath string) (update.Report, config.Config, error) {
-	return scanWithGitHubClient(ctx, root, configPath, nil)
+	return scanWithGitHubClient(ctx, root, configPath, nil, selectedGitHubToken())
 }
 
 func scanWithGitHubClient(
 	ctx context.Context,
 	root, configPath string,
 	github *githubapi.Client,
+	token string,
 ) (update.Report, config.Config, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -365,7 +379,7 @@ func scanWithGitHubClient(
 		return update.Report{}, config.Config{}, fmt.Errorf("invalid requestTimeout: %w", err)
 	}
 	client := &http.Client{Timeout: timeout}
-	resolver := update.NewHTTPResolver(client)
+	resolver := update.NewHTTPResolver(client, token)
 	resolver.GitHubClient = github
 	if endpoint := os.Getenv("GITHUB_API_URL"); endpoint != "" {
 		resolver.GitHubAPI = endpoint
@@ -491,7 +505,7 @@ customManagers:
     datasource: github-releases
     dependencyName: openhoo/hooversion
     filePatterns:
-      - '^\\.github/workflows/.*\\.ya?ml$'
+      - '^\.github/workflows/.*\.ya?ml$'
     matchStrings:
-      - 'HOOVERSION_VERSION:\\s*["'']?(?P<currentValue>[^\\s"'']+)'
+      - 'HOOVERSION_VERSION:\s*["'']?(?P<currentValue>[^\s"'']+)'
 `) + "\n"

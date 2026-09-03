@@ -206,3 +206,56 @@ func TestWritePlansRejectsTargetMetadataChangedAfterPlanning(t *testing.T) {
 		})
 	}
 }
+func TestApplyPreservesCargoConstraintOperator(t *testing.T) {
+	root := t.TempDir()
+	content := "[dependencies]\nfoo = \"=1.2.3\"\nbar = \"~1.2.3\"\n"
+	path := filepath.Join(root, "Cargo.toml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fooStart := strings.Index(content, "=1.2.3")
+	barStart := strings.Index(content, "~1.2.3")
+	report := Report{Updates: []Update{
+		{Candidate: Candidate{Manager: ManagerCargo, Name: "foo", CurrentVersion: "1.2.3", CurrentValue: "=1.2.3", Prefix: "=", File: "Cargo.toml", Start: fooStart, End: fooStart + len("=1.2.3")}, LatestVersion: "1.2.4", Status: "outdated"},
+		{Candidate: Candidate{Manager: ManagerCargo, Name: "bar", CurrentVersion: "1.2.3", CurrentValue: "~1.2.3", Prefix: "~", File: "Cargo.toml", Start: barStart, End: barStart + len("~1.2.3")}, LatestVersion: "1.3.0", Status: "outdated"},
+	}}
+	preview, err := Apply(root, report, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview) != 1 || string(preview[0].After) != "[dependencies]\nfoo = \"=1.2.4\"\nbar = \"~1.3.0\"\n" {
+		t.Fatalf("unexpected preview: %#v", preview)
+	}
+}
+func TestApplyActionFailsClosedForInvalidRanges(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "action.yml")
+	content := "uses: actions/checkout@abcdef\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		start int
+		end   int
+		value string
+	}{
+		{"shortened source", 30, 70, "abcdef"},
+		{"changed in bounds", strings.Index(content, "abcdef"), strings.Index(content, "abcdef") + len("abcdef"), "123456"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report := Report{Updates: []Update{{Candidate: Candidate{
+				Manager: ManagerGitHubActions, Name: "actions/checkout", CurrentValue: test.value,
+				CurrentVersion: "v1", File: "action.yml", Start: test.start, End: test.end,
+			}, LatestVersion: "v2", LatestDigest: strings.Repeat("b", 40), Status: "outdated"}}}
+			if _, err := Apply(root, report, false); err == nil {
+				t.Fatal("expected stale range error")
+			}
+			written, readErr := os.ReadFile(path)
+			if readErr != nil || string(written) != content {
+				t.Fatalf("source changed: %q (%v)", written, readErr)
+			}
+		})
+	}
+}

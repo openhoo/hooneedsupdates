@@ -60,10 +60,20 @@ Download a release archive and verify it against `SHA256SUMS`, or install with G
 go install github.com/openhoo/hooneedsupdates/cmd/hooneedsupdates@v0.3.0
 ```
 
-Successful non-release CI on `main` now runs Hooversion automatically. The
-version workflow creates the release commit and immutable tag, then dispatches
-the signed release workflow for that exact tag. Manual version runs default to
-dry-run; existing-tag rebuilds remain explicit in the release workflow.
+Successful non-release CI on `main` now runs Hooversion automatically. Hooversion
+pushes a release branch and reports the protected release PR; review and merge
+that PR. The merge's successful CI finalizes the release commit and immutable
+tag, then dispatches the signed release workflow for that exact tag. Manual
+version runs default to dry-run.
+
+To rebuild an existing stable tag, dispatch the release workflow from that same
+tag and pass the matching input. A `main`-ref dispatch is rejected before any
+release publication:
+
+```sh
+TAG=v0.3.0
+gh workflow run release.yml --ref "$TAG" --field tag="$TAG"
+```
 
 Container:
 

@@ -229,7 +229,10 @@ type resolutionResult struct {
 }
 
 func current(candidate Candidate, resolution Resolution) bool {
-	if resolution.Digest != "" && strings.EqualFold(candidate.CurrentValue, resolution.Digest) {
+	if resolution.Digest != "" {
+		if !strings.EqualFold(candidate.CurrentValue, resolution.Digest) {
+			return false
+		}
 		currentVersion := normalizeVersion(candidate.CurrentVersion)
 		latestVersion := normalizeVersion(resolution.Version)
 		return currentVersion == "" || (latestVersion != "" && currentVersion == latestVersion)
@@ -240,8 +243,15 @@ func current(candidate Candidate, resolution Resolution) bool {
 }
 
 func actionDigestChanged(candidate Candidate, resolution Resolution) bool {
-	return candidate.Manager == ManagerGitHubActions && resolution.Digest != "" &&
-		len(candidate.CurrentValue) == 40 && !strings.EqualFold(candidate.CurrentValue, resolution.Digest)
+	if candidate.Manager != ManagerGitHubActions || resolution.Digest == "" ||
+		strings.EqualFold(candidate.CurrentValue, resolution.Digest) {
+		return false
+	}
+	// A stale resolver result must never turn digest pinning into a downgrade.
+	if newer(resolution.Version, candidate.CurrentVersion) {
+		return false
+	}
+	return true
 }
 
 func statusOrder(status string) int {

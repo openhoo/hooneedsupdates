@@ -3,8 +3,10 @@ package githubapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,6 +64,51 @@ func TestClientRetriesReplayableRequestWithinWaitBudget(t *testing.T) {
 	}
 	if data, err := os.ReadFile(stateFile); err != nil || !strings.Contains(string(data), `"active": false`) {
 		t.Fatalf("successful retry did not write clear marker: %q error=%v", data, err)
+	}
+}
+
+func TestClientPersistsSaturatedHugeRetryAfter(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "rate-limit.json")
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		response := jsonResponse(http.StatusTooManyRequests, `{"message":"slow down"}`)
+		response.Header.Set("Retry-After", "9223372036854775807")
+		return response, nil
+	})
+	client, err := New(
+		&http.Client{Transport: transport}, "https://api.github.test",
+		Options{StateFile: stateFile, MaxRetries: 2, MaxWait: 30 * time.Second},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.now = func() time.Time { return now }
+	request, err := http.NewRequest(http.MethodGet, "https://api.github.test/repos/openhoo/tool", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(context.Background(), request)
+	var limited *RateLimitError
+	if !errors.As(err, &limited) {
+		t.Fatalf("error=%v", err)
+	}
+	maxSeconds := int64(math.MaxInt64) / int64(time.Second)
+	wantRetryAt := now.Add(time.Duration(maxSeconds) * time.Second)
+	if calls != 1 || !limited.RetryAt.Equal(wantRetryAt) || !limited.RetryAt.After(now) {
+		t.Fatalf("calls=%d rate limit=%+v want retry at %s", calls, limited, wantRetryAt)
+	}
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state cooldownState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.RetryAt.Equal(wantRetryAt) {
+		t.Fatalf("persisted retry at %s, want %s", state.RetryAt, wantRetryAt)
 	}
 }
 

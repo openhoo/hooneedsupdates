@@ -150,6 +150,12 @@ func planUpdates(root, rel string, updates []Update) (*plannedFile, error) {
 func buildEdits(before []byte, rel string, updates []Update) ([]edit, error) {
 	edits := make([]edit, 0, len(updates)*2)
 	for _, entry := range updates {
+		if entry.Start < 0 || entry.End < entry.Start || entry.End > len(before) {
+			return nil, fmt.Errorf("invalid edit range for %s", rel)
+		}
+		if string(before[entry.Start:entry.End]) != entry.CurrentValue {
+			return nil, fmt.Errorf("%s changed after scan at byte %d", rel, entry.Start)
+		}
 		replacement := replacementFor(entry)
 		if replacement == "" {
 			return nil, fmt.Errorf("no safe replacement for %s in %s:%d", entry.Name, rel, entry.Line)
