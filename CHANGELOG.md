@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 (2026-09-03)
+
+### Bug Fixes
+
+- **updates:** harden discovery and installers (970c7e4)
+
+### Other Changes
+
+- pin setup action to v0.3.0 (#13) (f3d33df)
+
 ## 0.3.0 (2026-09-01)
 
 ### Features
