@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 (2026-10-03)
+
+### Features
+
+- strengthen dependency planning and update automation (#19) (1a48ded)
+
+### Other Changes
+
+- **ci:** converge released tool pins (799fe68)
+- **ci:** adopt Hoonarqube v0.3.1 (64e1bbd)
+
 ## 0.3.1 (2026-09-03)
 
 ### Bug Fixes
