@@ -59,6 +59,9 @@ func Apply(root string, report Report, write bool) ([]AppliedFile, error) {
 }
 
 func validateReport(root string, report Report) error {
+	if err := RequireComplete(report); err != nil {
+		return err
+	}
 	if report.SchemaVersion != 0 && report.SchemaVersion != 2 {
 		return fmt.Errorf("unsupported report schema version %d", report.SchemaVersion)
 	}
@@ -288,6 +291,12 @@ func replacementFor(entry Update) string {
 		return ""
 	}
 	latest = displayVersion(latest, entry.CurrentVersion)
+	if entry.Manager == ManagerDocker && entry.CurrentDigest != "" {
+		if !validImageDigest(entry.LatestDigest) {
+			return ""
+		}
+		return latest + "@" + entry.LatestDigest
+	}
 	return entry.Prefix + latest + entry.Suffix
 }
 
@@ -350,10 +359,5 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	directoryHandle, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	defer directoryHandle.Close()
-	return directoryHandle.Sync()
+	return syncDirectory(directory)
 }

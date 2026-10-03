@@ -1,6 +1,9 @@
 package update
 
-import "time"
+import (
+	"github.com/openhoo/hooneedsupdates/internal/config"
+	"time"
+)
 
 type Manager string
 
@@ -24,34 +27,42 @@ var DefaultManagers = []Manager{
 }
 
 type Candidate struct {
-	Manager        Manager `json:"manager"`
-	Datasource     string  `json:"datasource"`
-	Name           string  `json:"name"`
-	CurrentVersion string  `json:"currentVersion"`
-	CurrentValue   string  `json:"-"`
-	File           string  `json:"file"`
-	Line           int     `json:"line"`
-	Start          int     `json:"-"`
-	End            int     `json:"-"`
-	Prefix         string  `json:"-"`
-	Suffix         string  `json:"-"`
+	NeedPublished     bool    `json:"-"`
+	Manager           Manager `json:"manager"`
+	Datasource        string  `json:"datasource"`
+	Name              string  `json:"name"`
+	CurrentVersion    string  `json:"currentVersion"`
+	CurrentValue      string  `json:"-"`
+	File              string  `json:"file"`
+	Line              int     `json:"line"`
+	Start             int     `json:"-"`
+	End               int     `json:"-"`
+	Prefix            string  `json:"-"`
+	Suffix            string  `json:"-"`
+	CurrentDigest     string  `json:"currentDigest,omitempty"`
+	UnsupportedReason string  `json:"unsupportedReason,omitempty"`
 }
 
 type Update struct {
+	Policy []config.PackageRule `json:"policy,omitempty"`
 	Candidate
-	LatestVersion string `json:"latestVersion,omitempty"`
-	LatestDigest  string `json:"latestDigest,omitempty"`
-	UpdateType    string `json:"updateType,omitempty"`
-	Status        string `json:"status"`
-	Error         string `json:"error,omitempty"`
+	LatestVersion string     `json:"latestVersion,omitempty"`
+	LatestDigest  string     `json:"latestDigest,omitempty"`
+	UpdateType    string     `json:"updateType,omitempty"`
+	Status        string     `json:"status"`
+	Error         string     `json:"error,omitempty"`
+	Group         string     `json:"group,omitempty"`
+	PublishedAt   *time.Time `json:"publishedAt,omitempty"`
 }
 
 type Summary struct {
-	Detected   int `json:"detected"`
-	Current    int `json:"current"`
-	Outdated   int `json:"outdated"`
-	Unresolved int `json:"unresolved"`
-	Ignored    int `json:"ignored"`
+	Detected    int `json:"detected"`
+	Current     int `json:"current"`
+	Outdated    int `json:"outdated"`
+	Unresolved  int `json:"unresolved"`
+	Ignored     int `json:"ignored"`
+	Blocked     int `json:"blocked,omitempty"`
+	Unsupported int `json:"unsupported,omitempty"`
 }
 
 type Report struct {
@@ -64,6 +75,7 @@ type Report struct {
 }
 
 type Resolution struct {
-	Version string
-	Digest  string
+	Version     string
+	Digest      string
+	PublishedAt *time.Time
 }

@@ -100,8 +100,18 @@ func (g *githubHost) Pulls(ctx context.Context, name, owner, branch, base string
 	query.Set("direction", "desc")
 	query.Set("per_page", "100")
 	var result []pullRequest
-	err := g.rest(ctx, http.MethodGet, g.repositoryPath(name)+"/pulls?"+query.Encode(), nil, &result)
-	return result, err
+	for page := 1; page <= 100; page++ {
+		query.Set("page", fmt.Sprint(page))
+		var batch []pullRequest
+		if err := g.rest(ctx, http.MethodGet, g.repositoryPath(name)+"/pulls?"+query.Encode(), nil, &batch); err != nil {
+			return nil, err
+		}
+		result = append(result, batch...)
+		if len(batch) < 100 {
+			return result, nil
+		}
+	}
+	return nil, errors.New("pull request pagination exceeds 100 pages; refusing partial ownership history")
 }
 
 func (g *githubHost) CreatePull(ctx context.Context, name, title, body, head, base string, draft bool) (pullRequest, error) {
@@ -120,15 +130,6 @@ func (g *githubHost) UpdatePull(ctx context.Context, name string, number int, ti
 
 func (g *githubHost) ClosePull(ctx context.Context, name string, number int) error {
 	return g.rest(ctx, http.MethodPatch, fmt.Sprintf("%s/pulls/%d", g.repositoryPath(name), number), map[string]string{"state": "closed"}, nil)
-}
-
-func (g *githubHost) DeleteRef(ctx context.Context, name, branch string) error {
-	path := g.repositoryPath(name) + "/git/refs/heads/" + url.PathEscape(branch)
-	err := g.rest(ctx, http.MethodDelete, path, nil, nil)
-	if errors.Is(err, errNotFound) {
-		return nil
-	}
-	return err
 }
 
 func (g *githubHost) AddLabels(ctx context.Context, name string, number int, labels []string) error {

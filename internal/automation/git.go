@@ -111,12 +111,18 @@ func (g gitVCS) Commit(
 }
 
 func (g gitVCS) Push(ctx context.Context, root, branch, expectedRemoteSHA string) error {
-	arguments := []string{"push"}
-	if expectedRemoteSHA != "" {
-		arguments = append(arguments, "--force-with-lease=refs/heads/"+branch+":"+expectedRemoteSHA)
-	}
+	// An empty expected SHA asserts absence and protects first publication too.
+	arguments := []string{"push", "--force-with-lease=refs/heads/" + branch + ":" + expectedRemoteSHA}
 	arguments = append(arguments, "origin", "HEAD:refs/heads/"+branch)
 	_, err := g.runRepository(ctx, root, nil, arguments...)
+	return err
+}
+
+func (g gitVCS) DeleteBranch(ctx context.Context, root, branch, expectedSHA string) error {
+	if len(expectedSHA) != 40 {
+		return errors.New("branch deletion requires an observed commit SHA")
+	}
+	_, err := g.runRepository(ctx, root, nil, "push", "--force-with-lease=refs/heads/"+branch+":"+expectedSHA, "origin", ":refs/heads/"+branch)
 	return err
 }
 
@@ -148,12 +154,14 @@ func (g gitVCS) run(
 	if err != nil {
 		return nil, err
 	}
-	command := exec.CommandContext(ctx, executable, arguments...)
+	base := []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "credential.helper="}
+	command := exec.CommandContext(ctx, executable, append(base, arguments...)...)
 	if directory != "" {
 		command.Dir = directory
 	}
 	environment := map[string]string{
 		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_LFS_SKIP_SMUDGE": "1",
 		"GIT_TERMINAL_PROMPT": "0",
 	}
@@ -172,9 +180,10 @@ func (g gitVCS) run(
 	command.Env = cleanEnvironment(environment)
 	output := &boundedBuffer{remaining: maxGitOutput}
 	command.Stdout = output
-	command.Stderr = output
+	stderr := &boundedBuffer{remaining: maxGitOutput}
+	command.Stderr = stderr
 	if err := command.Run(); err != nil {
-		message := strings.TrimSpace(output.String())
+		message := strings.TrimSpace(stderr.String() + "\n" + output.String())
 		if message != "" {
 			return output.Bytes(), fmt.Errorf("git %s: %w: %s", arguments[0], err, message)
 		}
@@ -186,7 +195,7 @@ func (g gitVCS) run(
 func expectedPaths(files []update.AppliedFile) (map[string]bool, []string, error) {
 	expected := make(map[string]bool, len(files))
 	for _, file := range files {
-		raw := filepath.ToSlash(file.Path)
+		raw := file.Path
 		path := pathpkg.Clean(raw)
 		if unsafeAppliedPath(raw, path) || expected[path] {
 			return nil, nil, fmt.Errorf("invalid or duplicate applied path %q", file.Path)
@@ -202,7 +211,7 @@ func expectedPaths(files []update.AppliedFile) (map[string]bool, []string, error
 }
 
 func unsafeAppliedPath(raw, cleaned string) bool {
-	if raw == "" || strings.Contains(raw, `\`) || pathpkg.IsAbs(cleaned) {
+	if raw == "" || strings.ContainsAny(raw, `\:`) || pathpkg.IsAbs(cleaned) {
 		return true
 	}
 	for _, character := range raw {
@@ -268,7 +277,7 @@ func cleanEnvironment(overrides map[string]string) []string {
 	var result []string
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if blocked[key] || strings.HasPrefix(key, "GIT_CONFIG_KEY_") || strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
+		if blocked[key] || strings.HasPrefix(key, "GIT_") {
 			continue
 		}
 		result = append(result, entry)

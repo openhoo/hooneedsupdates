@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -136,7 +139,7 @@ func TestClientPersistsSecondaryCooldownAndResumesLater(t *testing.T) {
 		limited.RetryAt != now.Add(time.Minute) {
 		t.Fatalf("rate limit=%+v", limited)
 	}
-	if info, err := os.Stat(stateFile); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(stateFile); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("state info=%v error=%v", info, err)
 	}
 
@@ -316,5 +319,87 @@ func jsonResponse(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestClientRejectsUnsafeRequestBeforeTransport(t *testing.T) {
+	calls := 0
+	client, err := New(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return jsonResponse(200, `{}`), nil
+	})}, "https://api.github.test", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"http://api.github.test/repos", "https://user:secret@api.github.test/repos", "https://other.test/repos"} {
+		request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Do(context.Background(), request); err == nil {
+			t.Fatalf("unsafe request accepted: %s", endpoint)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("transport called %d times", calls)
+	}
+}
+
+func TestClientConfinesRedirectsWithoutMutatingCaller(t *testing.T) {
+	for _, target := range []string{"https://sub.api.github.test/steal", "http://api.github.test/steal", "https://user:secret@api.github.test/steal"} {
+		t.Run(target, func(t *testing.T) {
+			calls := 0
+			transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				response := jsonResponse(http.StatusFound, `{}`)
+				response.Header.Set("Location", target)
+				return response, nil
+			})
+			caller := &http.Client{Transport: transport}
+			client, err := New(caller, "https://api.github.test", Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, _ := http.NewRequest(http.MethodGet, "https://api.github.test/repos", nil)
+			request.Header.Set("Authorization", "Bearer test-secret")
+			response, err := client.Do(context.Background(), request)
+			if response != nil {
+				response.Body.Close()
+			}
+			if err == nil || calls != 1 || caller.CheckRedirect != nil {
+				t.Fatalf("calls=%d error=%v caller mutated=%v", calls, err, caller.CheckRedirect != nil)
+			}
+		})
+	}
+}
+
+func TestClientAllowsSameHostRedirectAndPreservesCallback(t *testing.T) {
+	callbacks := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, "/finish", http.StatusFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer test-secret" {
+			t.Error("authorization lost on same-host redirect")
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer server.Close()
+	caller := server.Client()
+	caller.CheckRedirect = func(*http.Request, []*http.Request) error { callbacks++; return nil }
+	client, err := New(caller, server.URL, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/start", nil)
+	request.Header.Set("Authorization", "Bearer test-secret")
+	response, err := client.Do(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if callbacks != 1 {
+		t.Fatalf("callbacks=%d", callbacks)
 	}
 }

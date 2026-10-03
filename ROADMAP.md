@@ -26,10 +26,18 @@ NuGet repositories. Release remains a separate publication step.
 Exit: Go, Cargo, Bun/npm, and NuGet updates produce reproducible lockfile diffs
 without executing repository-provided commands.
 
+## Reviewed artifacts and container pins
+
+- [x] Exact offline saved plans with source hashes and creation-state checks.
+- [x] Unified diffs and explicit incomplete-inventory write refusal.
+- [x] Docker Hub version tags plus image-index digest updates.
+- [x] Honest unsupported Docker references and complete bounded catalogs.
+- [x] Native Windows and minimum-Go CI; real five-manager qualification.
+
 ## v0.3 - Grouping and compatibility policy
 
-- Named dependency groups and shared-version families.
-- Compatibility windows, minimum age, and release-channel policy.
+- [x] Named dependency groups and shared-version families.
+- [x] Compatibility windows, minimum age, and release-channel policy.
 - Security-update priority using Hooray findings.
 - Changelog and release-note evidence attached to plans.
 
@@ -63,9 +71,11 @@ unresolved, and policy-disallowed updates.
 
 ## v1.0 - Stable automation contract
 
-- Stable configuration and JSON schemas.
+- [x] Versioned configuration, report, and saved-plan schemas with drift checks.
+- Long-term schema compatibility guarantees.
 - Backward-compatible manager and datasource interfaces.
-- Documented recovery, migration, and support policy.
+- [x] Documented saved-plan recovery and migration.
+- Formal release/support policy.
 - Proven cross-platform release and long-running GitHub App operation.
 
 ## Non-goals

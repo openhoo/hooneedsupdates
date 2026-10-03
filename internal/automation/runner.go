@@ -100,17 +100,43 @@ func (r *Runner) runRepository(ctx context.Context, name string) (result Result)
 		return operationalError(result, err)
 	}
 	result = state.result
-	if state.report.Summary.Unresolved > 0 {
-		result.Error = unresolvedError(state.report)
-		return result
+	if err := update.RequireComplete(state.report); err != nil {
+		return r.handleIncomplete(ctx, state, err)
 	}
 	if err := r.loadManagedState(ctx, state); err != nil {
 		return operationalError(result, err)
 	}
 	if state.report.Summary.Outdated == 0 {
-		return r.handleCurrent(ctx, result, name, state.openPull, state.branchOwned, state.branchExists)
+		return r.handleCurrent(ctx, state)
 	}
 	return r.handleUpdates(ctx, state)
+}
+
+// Incomplete inventory cannot authorize a new update, cleanup, or an existing
+// auto-merge request. Inspect ownership before revoking the latter.
+func (r *Runner) handleIncomplete(ctx context.Context, state *repositoryState, incomplete error) Result {
+	result := state.result
+	result.Error = incomplete.Error()
+	result.AutoMergeReason = "incomplete selected update plan"
+	if err := r.loadManagedState(ctx, state); err != nil {
+		return operationalError(result, err)
+	}
+	if state.openPull == nil {
+		return result
+	}
+	setPullResult(&result, *state.openPull)
+	if state.openPull.AutoMerge == nil {
+		return result
+	}
+	result.AutoMergeAction = "would-disable"
+	if !r.write {
+		return result
+	}
+	if _, err := r.disableUnsafeAutoMerge(ctx, state.openPull, false); err != nil {
+		return operationalError(result, err)
+	}
+	result.AutoMergeAction = "disabled"
+	return result
 }
 
 func (r *Runner) prepareRepository(
@@ -199,6 +225,9 @@ func (r *Runner) handleUpdates(ctx context.Context, state *repositoryState) Resu
 	result.AutoMergeEligible, result.AutoMergeReason = autoMergeDecision(
 		r.settings, state.repository, state.report,
 	)
+	if state.openPull != nil && state.openPull.Draft {
+		result.AutoMergeEligible, result.AutoMergeReason = false, "pull request is a draft"
+	}
 	body := pullBody(state.name, result, state.report, r.settings.Lockfiles)
 	if !r.write {
 		return r.previewUpdate(state, result, body)
@@ -311,35 +340,9 @@ func (r *Runner) upsertPull(
 	return pull, "unchanged", err
 }
 
-func unresolvedError(report update.Report) string {
-	details := make([]string, 0, 4)
-	for _, entry := range report.Updates {
-		if entry.Status != "unresolved" {
-			continue
-		}
-		message := strings.ReplaceAll(strings.ReplaceAll(entry.Error, "\r", " "), "\n", " ")
-		if len(message) > 160 {
-			message = message[:157] + "..."
-		}
-		details = append(details, fmt.Sprintf("%s/%s: %s", entry.Manager, entry.Name, message))
-		if len(details) == 4 {
-			break
-		}
-	}
-	message := fmt.Sprintf("refusing a partial plan with %d unresolved dependencies", report.Summary.Unresolved)
-	if len(details) > 0 {
-		message += ": " + strings.Join(details, "; ")
-	}
-	return message
-}
-
-func (r *Runner) handleCurrent(
-	ctx context.Context,
-	result Result,
-	name string,
-	pull *pullRequest,
-	branchOwned, branchExists bool,
-) Result {
+func (r *Runner) handleCurrent(ctx context.Context, state *repositoryState) Result {
+	result, name, pull := state.result, state.name, state.openPull
+	branchOwned, branchExists := state.branchOwned, state.branchExists
 	result.Action = "current"
 	result.AutoMergeReason = "no outdated dependencies"
 	if !r.settings.CloseStale || (pull == nil && !(branchOwned && branchExists)) {
@@ -352,16 +355,16 @@ func (r *Runner) handleCurrent(
 		}
 		return result
 	}
+	if branchExists {
+		if err := r.vcs.DeleteBranch(ctx, state.checkout, result.Branch, state.remoteSHA); err != nil {
+			return operationalError(result, err)
+		}
+	}
 	if pull != nil {
 		if err := r.host.ClosePull(ctx, name, pull.Number); err != nil {
 			return operationalError(result, err)
 		}
 		setPullResult(&result, *pull)
-	}
-	if branchExists {
-		if err := r.host.DeleteRef(ctx, name, result.Branch); err != nil {
-			return operationalError(result, err)
-		}
 	}
 	result.Action = "closed"
 	return result
@@ -448,6 +451,15 @@ func autoMergeDecision(settings config.Automation, repository repository, report
 	policy := settings.AutoMerge
 	if !policy.Enabled {
 		return false, "disabled by configuration"
+	}
+	if settings.Draft {
+		return false, "draft pull requests cannot auto-merge"
+	}
+	if policy.RequireLockfiles && !settings.Lockfiles {
+		return false, "auto-merge policy requires lockfile regeneration"
+	}
+	if update.RequireComplete(report) != nil || report.Summary.Outdated == 0 {
+		return false, "auto-merge requires a complete plan with outdated dependencies"
 	}
 	if !repository.AllowAutoMerge {
 		return false, "repository does not allow native GitHub auto-merge"

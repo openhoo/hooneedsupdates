@@ -3,11 +3,9 @@ package update
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -319,72 +317,6 @@ func newLockfileGroup(manager Manager, directory, tool string) *lockfileGroup {
 	}
 }
 
-func goGroups(root string, entry Update) ([]*lockfileGroup, error) {
-	directory := cleanRelativeDirectory(filepath.Dir(filepath.FromSlash(entry.File)))
-	group := newLockfileGroup(ManagerGoMod, directory, "go")
-	group.manifests[entry.File] = true
-	group.lockfiles[joinRelative(directory, "go.sum")] = true
-	if workspace, ok, err := nearestFile(root, directory, "go.work"); err != nil {
-		return nil, err
-	} else if ok {
-		workspaceSum := joinRelative(filepath.Dir(filepath.FromSlash(workspace)), "go.work.sum")
-		group.lockfiles[workspaceSum] = true
-		group.optional[workspaceSum] = true
-	}
-	return []*lockfileGroup{group}, nil
-}
-
-func cargoGroups(root string, entry Update) ([]*lockfileGroup, error) {
-	directory, err := cargoWorkspace(root, entry.File)
-	if err != nil {
-		return nil, err
-	}
-	group := newLockfileGroup(ManagerCargo, directory, "cargo")
-	group.manifests[entry.File] = true
-	group.lockfiles[joinRelative(directory, "Cargo.lock")] = true
-	return []*lockfileGroup{group}, nil
-}
-
-func npmGroups(root string, entry Update) ([]*lockfileGroup, error) {
-	directory, tool, lockfile, err := npmLockfile(root, entry.File)
-	if err != nil {
-		return nil, err
-	}
-	group := newLockfileGroup(ManagerNPM, directory, tool)
-	group.manifests[entry.File] = true
-	group.lockfiles[lockfile] = true
-	return []*lockfileGroup{group}, nil
-}
-
-func nugetGroups(root string, entry Update) ([]*lockfileGroup, error) {
-	base := filepath.Base(filepath.FromSlash(entry.File))
-	var projects []string
-	if strings.EqualFold(filepath.Ext(base), ".csproj") {
-		projects = []string{entry.File}
-	} else if base == "Directory.Packages.props" {
-		var err error
-		projects, err = nugetProjects(root, cleanRelativeDirectory(filepath.Dir(filepath.FromSlash(entry.File))))
-		if err != nil {
-			return nil, err
-		}
-		if len(projects) == 0 {
-			return nil, fmt.Errorf("%s has no descendant .csproj files", entry.File)
-		}
-	} else {
-		return nil, fmt.Errorf("unsupported NuGet manifest %s", entry.File)
-	}
-	groups := make([]*lockfileGroup, 0, len(projects))
-	for _, project := range projects {
-		directory := cleanRelativeDirectory(filepath.Dir(filepath.FromSlash(project)))
-		group := newLockfileGroup(ManagerNuGet, directory, "dotnet")
-		group.manifests[entry.File] = true
-		group.projects[project] = true
-		group.lockfiles[joinRelative(directory, "packages.lock.json")] = true
-		groups = append(groups, group)
-	}
-	return groups, nil
-}
-
 func cleanRelativeDirectory(directory string) string {
 	directory = filepath.Clean(directory)
 	if directory == "." || directory == string(filepath.Separator) {
@@ -430,133 +362,6 @@ func nearestFile(root, startDirectory, name string) (string, bool, error) {
 	}
 }
 
-func cargoWorkspace(root, manifest string) (string, error) {
-	start := cleanRelativeDirectory(filepath.Dir(filepath.FromSlash(manifest)))
-	if lockfile, ok, err := nearestFile(root, start, "Cargo.lock"); err != nil {
-		return "", err
-	} else if ok {
-		return cleanRelativeDirectory(filepath.Dir(filepath.FromSlash(lockfile))), nil
-	}
-	root = filepath.Clean(root)
-	directory := filepath.Join(root, filepath.FromSlash(start))
-	for {
-		manifestPath := filepath.Join(directory, "Cargo.toml")
-		data, err := os.ReadFile(manifestPath)
-		if err == nil && hasCargoWorkspace(data) {
-			relative, err := filepath.Rel(root, directory)
-			if err != nil {
-				return "", err
-			}
-			return cleanRelativeDirectory(relative), nil
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		if directory == root {
-			break
-		}
-		directory = filepath.Dir(directory)
-	}
-	return start, nil
-}
-
-func hasCargoWorkspace(data []byte) bool {
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		trimmed := strings.TrimSpace(string(line))
-		if trimmed == "[workspace]" || strings.HasPrefix(trimmed, "[workspace] #") {
-			return true
-		}
-	}
-	return false
-}
-
-func npmLockfile(root, manifest string) (directory, tool, lockfile string, err error) {
-	start := cleanRelativeDirectory(filepath.Dir(filepath.FromSlash(manifest)))
-	root = filepath.Clean(root)
-	current := filepath.Join(root, filepath.FromSlash(start))
-	for {
-		var matches []struct {
-			name string
-			tool string
-		}
-		for _, candidate := range []struct {
-			name string
-			tool string
-		}{{"bun.lock", "bun"}, {"bun.lockb", "bun"}, {"package-lock.json", "npm"}} {
-			info, statErr := os.Lstat(filepath.Join(current, candidate.name))
-			if statErr == nil {
-				if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-					return "", "", "", fmt.Errorf("refusing non-regular %s", filepath.Join(current, candidate.name))
-				}
-				matches = append(matches, candidate)
-			} else if !errors.Is(statErr, os.ErrNotExist) {
-				return "", "", "", statErr
-			}
-		}
-		if len(matches) > 1 {
-			return "", "", "", fmt.Errorf("multiple JavaScript lockfiles beside or above %s", manifest)
-		}
-		if len(matches) == 1 {
-			relativeDirectory, relErr := filepath.Rel(root, current)
-			if relErr != nil {
-				return "", "", "", relErr
-			}
-			directory = cleanRelativeDirectory(relativeDirectory)
-			return directory, matches[0].tool, joinRelative(directory, matches[0].name), nil
-		}
-		if current == root {
-			break
-		}
-		current = filepath.Dir(current)
-	}
-	data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(manifest)))
-	if readErr != nil {
-		return "", "", "", readErr
-	}
-	var metadata struct {
-		PackageManager string `json:"packageManager"`
-	}
-	if unmarshalErr := json.Unmarshal(data, &metadata); unmarshalErr != nil {
-		return "", "", "", unmarshalErr
-	}
-	directory = start
-	switch {
-	case strings.HasPrefix(metadata.PackageManager, "bun@"):
-		return directory, "bun", joinRelative(directory, "bun.lock"), nil
-	case strings.HasPrefix(metadata.PackageManager, "npm@"):
-		return directory, "npm", joinRelative(directory, "package-lock.json"), nil
-	default:
-		return "", "", "", fmt.Errorf("%s has no supported lockfile or bun/npm packageManager", manifest)
-	}
-}
-
-func nugetProjects(root, directory string) ([]string, error) {
-	start, err := containedPath(root, joinRelative(directory, "."))
-	if err != nil {
-		return nil, err
-	}
-	var projects []string
-	err = filepath.WalkDir(start, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() && path != start && excludedDirectory(entry.Name()) {
-			return filepath.SkipDir
-		}
-		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".csproj") {
-			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		projects = append(projects, filepath.ToSlash(relative))
-		return nil
-	})
-	sort.Strings(projects)
-	return projects, err
-}
-
 func pathWithin(root, candidate string) bool {
 	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
@@ -573,9 +378,15 @@ func repositoryRoot(root string) (string, error) {
 	}
 	repository := filepath.Clean(strings.TrimSpace(string(output)))
 	if repository != filepath.Clean(absRoot) {
-		return "", fmt.Errorf("lockfile mode requires repository root %q, got %q", repository, absRoot)
+		// Git canonicalizes system aliases such as macOS /var -> /private/var.
+		// Compare directory identity while retaining the path bound to the report.
+		requested, requestedErr := os.Stat(absRoot)
+		actual, actualErr := os.Stat(repository)
+		if requestedErr != nil || actualErr != nil || !os.SameFile(requested, actual) {
+			return "", fmt.Errorf("lockfile mode requires repository root %q, got %q", repository, absRoot)
+		}
 	}
-	return repository, nil
+	return absRoot, nil
 }
 
 func validateSourceState(root string, plan regenerationPlan) error {
@@ -692,39 +503,6 @@ func sortedSnapshotPaths(snapshots map[string]sourceSnapshot) []string {
 	return result
 }
 
-func rejectCargoProjectConfig(root string, groups []*lockfileGroup) error {
-	checked := map[string]bool{}
-	for _, group := range groups {
-		if group.manager != ManagerCargo {
-			continue
-		}
-		directory := filepath.Join(root, filepath.FromSlash(group.directory))
-		for {
-			for _, name := range []string{"config.toml", "config"} {
-				candidate := filepath.Join(directory, ".cargo", name)
-				if checked[candidate] {
-					continue
-				}
-				checked[candidate] = true
-				if _, err := os.Lstat(candidate); err == nil {
-					return fmt.Errorf("repository Cargo configuration is not allowed in lockfile mode: %s", candidate)
-				} else if !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-			}
-			if filepath.Clean(directory) == filepath.Clean(root) {
-				break
-			}
-			parent := filepath.Dir(directory)
-			if parent == directory || !pathWithin(root, parent) {
-				break
-			}
-			directory = parent
-		}
-	}
-	return nil
-}
-
 func runGit(ctx context.Context, directory, hooksDirectory string, arguments ...string) ([]byte, error) {
 	executable, err := exec.LookPath("git")
 	if err != nil {
@@ -737,12 +515,24 @@ func runGit(ctx context.Context, directory, hooksDirectory string, arguments ...
 	base = append(base, "-C", directory)
 	base = append(base, arguments...)
 	process := exec.CommandContext(ctx, executable, base...)
+	// Local repository selection must not be redirected by an enclosing CI job.
+	// Preserve config inputs here so repository content-filter checks can inspect
+	// them before worktree creation; strip only Git's repository overrides.
+	for _, variable := range os.Environ() {
+		key, _, _ := strings.Cut(variable, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX":
+			continue
+		}
+		process.Env = append(process.Env, variable)
+	}
 	output := &limitedBuffer{remaining: maxCommandOutput}
 	process.Stdout = output
-	process.Stderr = output
+	stderr := &limitedBuffer{remaining: maxCommandOutput}
+	process.Stderr = stderr
 	err = process.Run()
 	if err != nil {
-		message := strings.TrimSpace(output.String())
+		message := strings.TrimSpace(stderr.String() + "\n" + output.String())
 		if message != "" {
 			return output.Bytes(), fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, message)
 		}
@@ -778,6 +568,21 @@ func regenerateOnce(
 	defer func() {
 		_, _ = runGit(context.Background(), sourceRoot, hooks, "worktree", "remove", "--force", worktree)
 	}()
+	// Git checkout conversion (notably Windows autocrlf) must not change the
+	// byte ranges approved from the source checkout. Restore its verified bytes.
+	for _, relative := range sortedSnapshotPaths(plan.source) {
+		snapshot := plan.source[relative]
+		if !snapshot.existed {
+			continue
+		}
+		target, err := containedPath(worktree, relative)
+		if err != nil {
+			return nil, err
+		}
+		if err := atomicWrite(target, snapshot.data, snapshot.mode); err != nil {
+			return nil, err
+		}
+	}
 	worktreeReport := report
 	worktreeReport.Root = filepath.ToSlash(worktree)
 	if _, err := Apply(worktree, worktreeReport, true); err != nil {

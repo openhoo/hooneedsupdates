@@ -458,3 +458,17 @@ func TestCargoCommandUsesRenamedPackageIdentity(t *testing.T) {
 		t.Fatal("Cargo command omitted --package")
 	}
 }
+
+func TestLockfilesPreserveSourceByteRangesAcrossCheckoutConversion(t *testing.T) {
+	root := gitFixture(t, map[string]string{"go.mod": "module example.test/demo\n\ngo 1.25.0\n\nrequire example.test/dependency v1.0.0\n", "go.sum": "before\n"})
+	gitRun(t, root, "config", "core.autocrlf", "true")
+	report := fixtureReport(t, root, "go.mod", ManagerGoMod, "example.test/dependency", "v1.0.0", "v1.1.0")
+	runner := &fakeLockRunner{run: func(_ int, command lockCommand) error {
+		return os.WriteFile(filepath.Join(command.dir, "go.sum"), []byte("example.test/dependency v1.1.0 h1:fixture\n"), 0644)
+	}}
+	files, err := applyWithLockfiles(context.Background(), root, report, false, time.Minute, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAppliedPaths(t, files, "go.mod", "go.sum")
+}

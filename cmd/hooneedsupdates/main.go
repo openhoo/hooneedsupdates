@@ -67,6 +67,9 @@ func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer
 	format := flags.String("format", "table", "table or json")
 	write := flags.Bool("write", false, "push managed branches and create, update, or close pull requests")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *format != "table" && *format != "json" {
@@ -160,7 +163,7 @@ func updateRepository(
 		return update.Report{}, nil, err
 	}
 	report = automation.SelectReport(report, selection)
-	if report.Summary.Unresolved > 0 {
+	if update.RequireComplete(report) != nil {
 		return report, nil, nil
 	}
 	if lockfiles {
@@ -218,7 +221,12 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	format := flags.String("format", "table", "table or json")
 	failOn := flags.String("fail-on", "never", "never, outdated, or unresolved")
 	showAll := flags.Bool("all", false, "include current dependencies in table output")
+	planPath := flags.String("plan", "", "save exact reviewed output for offline apply")
+	lockfiles := flags.Bool("lockfiles", false, "include reproducibly regenerated lockfiles in saved plan")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *format != "table" && *format != "json" {
@@ -233,10 +241,34 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 2
 	}
-	report, _, err := scan(ctx, root, *configPath)
+	if *lockfiles && *planPath == "" {
+		fmt.Fprintln(stderr, "scan --lockfiles requires --plan")
+		return 2
+	}
+	report, cfg, err := scan(ctx, root, *configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *planPath != "" {
+		var files []update.AppliedFile
+		if *lockfiles {
+			timeout, _ := time.ParseDuration(cfg.LockfileTimeout)
+			files, err = update.ApplyWithLockfiles(ctx, root, report, false, timeout)
+		} else {
+			files, err = update.Apply(root, report, false)
+		}
+		if err == nil {
+			var plan update.Plan
+			plan, err = update.CreatePlan(root, report, files, *lockfiles)
+			if err == nil {
+				err = update.SavePlan(*planPath, plan)
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 	switch *format {
 	case "json":
@@ -261,32 +293,65 @@ func runApply(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	configPath := flags.String("config", "", "configuration file")
 	write := flags.Bool("write", false, "write the reviewed update plan")
 	lockfiles := flags.Bool("lockfiles", false, "regenerate supported lockfiles reproducibly in isolated Git worktrees")
+	planPath := flags.String("plan", "", "apply saved exact output without network or package managers")
+	diff := flags.Bool("diff", false, "print unified diff of exact output")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	root, ok := singleRoot(flags.Args(), stderr)
 	if !ok {
 		return 2
 	}
-	report, cfg, err := scan(ctx, root, *configPath)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 	var files []update.AppliedFile
-	if *lockfiles {
-		lockfileTimeout, parseErr := time.ParseDuration(cfg.LockfileTimeout)
-		if parseErr != nil {
-			fmt.Fprintf(stderr, "invalid lockfileTimeout: %v\n", parseErr)
-			return 1
+	var err error
+	if *planPath != "" {
+		if *configPath != "" || *lockfiles {
+			fmt.Fprintln(stderr, "--plan cannot be combined with --config or --lockfiles; saved output defines both")
+			return 2
 		}
-		files, err = update.ApplyWithLockfiles(ctx, root, report, *write, lockfileTimeout)
+		var plan update.Plan
+		plan, err = update.LoadPlan(*planPath)
+		if err == nil {
+			files, err = update.ApplyPlan(root, plan, false)
+		}
+		if err == nil && *diff {
+			err = update.WriteDiff(stdout, files)
+		}
+		if err == nil && *write {
+			files, err = update.ApplyPlan(root, plan, true)
+		}
 	} else {
-		files, err = update.Apply(root, report, *write)
+		var report update.Report
+		var cfg config.Config
+		report, cfg, err = scan(ctx, root, *configPath)
+		if err == nil {
+			if *lockfiles {
+				timeout, _ := time.ParseDuration(cfg.LockfileTimeout)
+				files, err = update.ApplyWithLockfiles(ctx, root, report, false, timeout)
+			} else {
+				files, err = update.Apply(root, report, false)
+			}
+			if err == nil && *diff {
+				err = update.WriteDiff(stdout, files)
+			}
+			if err == nil && *write {
+				var plan update.Plan
+				plan, err = update.CreatePlan(root, report, files, *lockfiles)
+				if err == nil {
+					files, err = update.ApplyPlan(root, plan, true)
+				}
+			}
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *diff {
+		return 0
 	}
 	if len(files) == 0 {
 		fmt.Fprintln(stdout, "No applicable updates.")
@@ -308,6 +373,8 @@ func runApply(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	if !*write {
 		fmt.Fprintln(stdout, "No files changed. Re-run with --write after review.")
+	} else if *planPath != "" {
+		fmt.Fprintln(stdout, "Saved reviewed output written without registry or package-manager execution.")
 	} else if *lockfiles {
 		fmt.Fprintln(stdout, "Manifest and lockfile edits written after two reproducible isolated regenerations.")
 	} else {
@@ -320,6 +387,9 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	root, ok := singleRoot(flags.Args(), stderr)
@@ -380,10 +450,19 @@ func scanWithGitHubClient(
 	}
 	client := &http.Client{Timeout: timeout}
 	resolver := update.NewHTTPResolver(client, token)
-	resolver.GitHubClient = github
 	if endpoint := os.Getenv("GITHUB_API_URL"); endpoint != "" {
 		resolver.GitHubAPI = endpoint
 	}
+	if github == nil {
+		maxWait, _ := time.ParseDuration(cfg.Automation.RateLimit.MaxWait)
+		github, err = githubapi.New(client, resolver.GitHubAPI, githubapi.Options{
+			MaxRetries: cfg.Automation.RateLimit.MaxRetries, MaxWait: maxWait,
+		})
+		if err != nil {
+			return update.Report{}, config.Config{}, err
+		}
+	}
+	resolver.GitHubClient = github
 	report, err := (update.Scanner{Config: cfg, Resolver: resolver}).Scan(ctx, absRoot)
 	return report, cfg, err
 }
@@ -403,9 +482,9 @@ func printTable(output io.Writer, report update.Report, all bool) {
 			entry.Status, entry.Manager, entry.Name, entry.CurrentVersion, latest, entry.File, entry.Line)
 	}
 	_ = writer.Flush()
-	fmt.Fprintf(output, "Detected %d; outdated %d; unresolved %d; ignored %d; current %d.\n",
+	fmt.Fprintf(output, "Detected %d; outdated %d; unresolved %d; ignored %d; current %d; blocked %d; unsupported %d.\n",
 		report.Summary.Detected, report.Summary.Outdated, report.Summary.Unresolved,
-		report.Summary.Ignored, report.Summary.Current)
+		report.Summary.Ignored, report.Summary.Current, report.Summary.Blocked, report.Summary.Unsupported)
 }
 
 func reportExit(report update.Report, failOn string, stderr io.Writer) int {
@@ -417,7 +496,7 @@ func reportExit(report update.Report, failOn string, stderr io.Writer) int {
 			return 2
 		}
 	case "unresolved":
-		if report.Summary.Unresolved > 0 {
+		if update.RequireComplete(report) != nil {
 			return 3
 		}
 	default:
@@ -440,8 +519,8 @@ func singleRoot(args []string, stderr io.Writer) (string, bool) {
 
 func printHelp(output io.Writer) {
 	commands := []string{
-		"scan [path]   Resolve and report dependency updates",
-		"apply [path]  Preview edits; --lockfiles verifies lockfiles; --write applies them",
+		"scan [path]   Resolve updates; --plan saves exact output for offline apply",
+		"apply [path]  Preview edits; --plan loads saved output; --diff reviews; --write applies",
 		"update-repos [owner/repository ...]  Preview fleet PRs; --write reconciles them",
 		"init [path]   Create strict starter configuration",
 		"version       Print version",

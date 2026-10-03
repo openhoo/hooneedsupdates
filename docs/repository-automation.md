@@ -28,7 +28,7 @@ automation:
     dependencies: ['^openhoo/']
 ```
 
-Empty fields mean all values. Matching unresolved inputs remain selected even
+Empty fields mean all values. Matching unresolved, blocked, and unsupported inputs remain selected even
 when `updateTypes` is restricted, because an unknown version must never disappear
 behind a type filter. Unselected findings remain visible in normal `scan` output
 but neither enter nor block this managed PR. This lets a Hoostack tool-pin PR
@@ -40,7 +40,7 @@ For every configured repository HooNeedsUpdates:
 
 1. reads repository metadata and clones the current default branch;
 2. resolves every configured dependency and refuses partial plans with any
-   unresolved datasource;
+   unresolved, blocked, or unsupported selected input;
 3. applies the plan, by default regenerating lockfiles twice in detached
    worktrees and requiring byte-identical output;
 4. rejects every changed path not returned by the reviewed apply operation;
@@ -49,12 +49,16 @@ For every configured repository HooNeedsUpdates:
 6. creates or updates one marked pull request;
 7. uses `--force-with-lease` with the exact remote branch SHA when the default
    branch or plan changed;
-8. closes the marked PR and deletes its matching branch when the plan becomes
-   current.
+8. deletes the managed branch using the exact observed SHA lease, then closes the
+   marked PR when the selected plan becomes current. A concurrent branch change
+   refuses deletion and closure.
 
 An existing branch without a marked open or matching historical PR is never
 overwritten. A closed PR proves branch ownership only while the remote branch
-still points at that PR's recorded head SHA.
+still points at that PR's recorded head SHA. PR discovery fetches at most 100
+pages of 100 results and refuses incomplete ownership history at that bound.
+Group selection must keep or exclude the entire family. See
+[update policy](update-policy.md).
 
 ## Exact auto-merge policy
 
@@ -83,7 +87,11 @@ Eligible PRs use GitHub's `enablePullRequestAutoMerge` mutation. GitHub still
 waits for the repository's required checks, reviews, conversation resolution,
 deployment gates, and up-to-date-branch rules. HooNeedsUpdates never substitutes
 its own green status for those controls. If a later plan stops matching the
-policy, HooNeedsUpdates disables an existing auto-merge request.
+policy, HooNeedsUpdates disables an existing auto-merge request. A successful
+scan with unresolved, blocked, or unsupported selected entries also revokes an
+existing request on the owned PR while leaving its branch and PR open. Preview
+reports `would-disable`. A failed scan or unavailable GitHub API cannot establish
+that revocation; the reported error must be resolved before trusting a new run.
 
 `draft: true` and enabled auto-merge are rejected as contradictory. Major
 updates require explicit inclusion in `updateTypes`.

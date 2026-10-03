@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -27,11 +28,17 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 	if s.Resolver == nil {
 		return Report{}, fmt.Errorf("resolver is required")
 	}
+	if err := s.Config.Validate(); err != nil {
+		return Report{}, fmt.Errorf("invalid scanner configuration: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return Report{}, err
 	}
-	candidates, err := (Extractor{Root: absRoot, Config: s.Config}).Extract()
+	candidates, err := (Extractor{Root: absRoot, Config: s.Config}).ExtractContext(ctx)
 	if err != nil {
 		return Report{}, err
 	}
@@ -48,7 +55,8 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 	var fatalErr error
 	var fatalMu sync.Mutex
 	resolveCached := func(candidate Candidate) (Resolution, error) {
-		key := strings.Join([]string{candidate.Datasource, candidate.Name, candidate.CurrentVersion}, "\x00")
+		prereleases, _, _ := policyChannel(s.Config, candidate)
+		key := strings.Join([]string{candidate.Datasource, candidate.Name, candidate.CurrentVersion, candidate.CurrentDigest, fmt.Sprint(candidate.NeedPublished), fmt.Sprint(prereleases)}, "\x00")
 		cacheMu.Lock()
 		if existing, ok := cache[key]; ok {
 			cacheMu.Unlock()
@@ -62,7 +70,7 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 		pending := &resolutionResult{done: make(chan struct{})}
 		cache[key] = pending
 		cacheMu.Unlock()
-		resolution, resolveErr := s.Resolver.Resolve(ctx, candidate, s.Config.IncludePrereleases)
+		resolution, resolveErr := s.Resolver.Resolve(ctx, candidate, prereleases)
 		cacheMu.Lock()
 		pending.resolution, pending.err = resolution, resolveErr
 		close(pending.done)
@@ -74,11 +82,24 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 		go func() {
 			defer workers.Done()
 			for task := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
 				candidate := candidates[task.index]
 				if reason := s.Config.IgnoreReason(string(candidate.Manager), candidate.Name); reason != "" {
 					updates[task.index] = Update{Candidate: candidate, Status: "ignored", Error: reason}
 					continue
 				}
+				if candidate.UnsupportedReason != "" {
+					updates[task.index] = Update{Candidate: candidate, Status: "unsupported", Error: candidate.UnsupportedReason}
+					continue
+				}
+				_, needPublished, policyErr := policyChannel(s.Config, candidate)
+				if policyErr != "" {
+					updates[task.index] = Update{Candidate: candidate, Status: "blocked", Error: policyErr}
+					continue
+				}
+				candidate.NeedPublished = needPublished
 				resolution, resolveErr := resolveCached(candidate)
 				if resolveErr != nil {
 					var limited *githubapi.RateLimitError
@@ -97,15 +118,32 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 			}
 		}()
 	}
+dispatch:
 	for index := range candidates {
-		jobs <- job{index: index}
+		select {
+		case jobs <- job{index: index}:
+		case <-ctx.Done():
+			break dispatch
+		}
 	}
 	close(jobs)
 	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	if fatalErr != nil {
 		return Report{}, fatalErr
 	}
 
+	now := time.Now
+	if s.Now != nil {
+		now = s.Now
+	}
+	nowTime := now().UTC()
+	for i, entry := range updates {
+		updates[i] = applyPackagePolicy(s.Config, entry, nowTime)
+	}
+	enforceGroups(s.Config, updates)
 	sort.SliceStable(updates, func(i, j int) bool {
 		if updates[i].Status != updates[j].Status {
 			return statusOrder(updates[i].Status) < statusOrder(updates[j].Status)
@@ -115,13 +153,10 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 		}
 		return updates[i].Line < updates[j].Line
 	})
-	now := time.Now
-	if s.Now != nil {
-		now = s.Now
-	}
+
 	report := Report{
 		SchemaVersion: 2,
-		GeneratedAt:   now().UTC(),
+		GeneratedAt:   nowTime,
 		Root:          filepath.ToSlash(absRoot),
 		PlanDigest:    planDigest(updates),
 		Updates:       updates,
@@ -137,6 +172,10 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 			report.Summary.Unresolved++
 		case "ignored":
 			report.Summary.Ignored++
+		case "blocked":
+			report.Summary.Blocked++
+		case "unsupported":
+			report.Summary.Unsupported++
 		default:
 		}
 	}
@@ -158,8 +197,21 @@ func FilterReport(report Report, keep func(Update) bool) Report {
 	filtered := report
 	filtered.Updates = make([]Update, 0, len(report.Updates))
 	filtered.Summary = Summary{}
+	groupSelection := map[string]uint8{}
 	for _, entry := range report.Updates {
-		if !keep(entry) {
+		if entry.Group != "" {
+			if keep(entry) {
+				groupSelection[entry.Group] |= 1
+			} else {
+				groupSelection[entry.Group] |= 2
+			}
+		}
+	}
+	for _, entry := range report.Updates {
+		if groupSelection[entry.Group] == 3 {
+			entry.Status = "blocked"
+			entry.Error = "selection would split update group"
+		} else if !keep(entry) {
 			continue
 		}
 		filtered.Updates = append(filtered.Updates, entry)
@@ -173,6 +225,10 @@ func FilterReport(report Report, keep func(Update) bool) Report {
 			filtered.Summary.Unresolved++
 		case "ignored":
 			filtered.Summary.Ignored++
+		case "blocked":
+			filtered.Summary.Blocked++
+		case "unsupported":
+			filtered.Summary.Unsupported++
 		}
 	}
 	filtered.PlanDigest = planDigest(filtered.Updates)
@@ -181,7 +237,7 @@ func FilterReport(report Report, keep func(Update) bool) Report {
 
 func planDigest(updates []Update) string {
 	digest := sha256.New()
-	writeDigestField(digest, "hooneedsupdates-plan-v1")
+	writeDigestField(digest, "hooneedsupdates-plan-v2")
 	for _, entry := range updates {
 		if entry.Status != "outdated" {
 			continue
@@ -191,9 +247,12 @@ func planDigest(updates []Update) string {
 			entry.CurrentValue, entry.File, fmt.Sprintf("%d", entry.Start),
 			fmt.Sprintf("%d", entry.End), entry.Prefix, entry.Suffix,
 			entry.LatestVersion, entry.LatestDigest, entry.UpdateType,
+			entry.CurrentDigest, entry.Group,
 		} {
 			writeDigestField(digest, field)
 		}
+		policy, _ := json.Marshal(entry.Policy)
+		writeDigestField(digest, string(policy))
 	}
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }
@@ -204,13 +263,13 @@ func writeDigestField(digest hash.Hash, value string) {
 }
 
 func classifyResolved(cfg config.Config, candidate Candidate, resolution Resolution) Update {
-	entry := Update{Candidate: candidate, LatestVersion: resolution.Version, LatestDigest: resolution.Digest}
+	entry := Update{Candidate: candidate, LatestVersion: resolution.Version, LatestDigest: resolution.Digest, PublishedAt: resolution.PublishedAt}
 	entry.UpdateType = updateType(candidate.CurrentVersion, resolution.Version)
 	if current(candidate, resolution) || constraintAllowsLatest(candidate, resolution.Version) {
 		entry.Status = "current"
 		return entry
 	}
-	if !newer(candidate.CurrentVersion, resolution.Version) && !actionDigestChanged(candidate, resolution) {
+	if !newer(candidate.CurrentVersion, resolution.Version) && !actionDigestChanged(candidate, resolution) && !dockerDigestChanged(candidate, resolution) {
 		entry.Status = "current"
 		return entry
 	}
@@ -229,6 +288,10 @@ type resolutionResult struct {
 }
 
 func current(candidate Candidate, resolution Resolution) bool {
+	if candidate.Manager == ManagerDocker {
+		return normalizeVersion(candidate.CurrentVersion) == normalizeVersion(resolution.Version) &&
+			(candidate.CurrentDigest == "" || strings.EqualFold(candidate.CurrentDigest, resolution.Digest))
+	}
 	if resolution.Digest != "" {
 		if !strings.EqualFold(candidate.CurrentValue, resolution.Digest) {
 			return false
@@ -240,6 +303,11 @@ func current(candidate Candidate, resolution Resolution) bool {
 	current := normalizeVersion(candidate.CurrentVersion)
 	latest := normalizeVersion(resolution.Version)
 	return current != "" && latest != "" && current == latest
+}
+
+func dockerDigestChanged(candidate Candidate, resolution Resolution) bool {
+	return candidate.Manager == ManagerDocker && candidate.CurrentDigest != "" && resolution.Digest != "" &&
+		!strings.EqualFold(candidate.CurrentDigest, resolution.Digest) && !newer(resolution.Version, candidate.CurrentVersion)
 }
 
 func actionDigestChanged(candidate Candidate, resolution Resolution) bool {

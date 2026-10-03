@@ -3,18 +3,14 @@ package update
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/openhoo/hooneedsupdates/internal/githubapi"
-	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 )
 
@@ -43,7 +39,7 @@ func NewHTTPResolver(client *http.Client, token string) *HTTPResolver {
 	}
 }
 
-func (r *HTTPResolver) Resolve(ctx context.Context, entry Candidate, includePrereleases bool) (Resolution, error) {
+func (r *HTTPResolver) resolveVersion(ctx context.Context, entry Candidate, includePrereleases bool) (Resolution, error) {
 	switch entry.Datasource {
 	case "go":
 		return r.resolveGo(ctx, entry.Name, includePrereleases)
@@ -56,297 +52,10 @@ func (r *HTTPResolver) Resolve(ctx context.Context, entry Candidate, includePrer
 	case "github-releases":
 		return r.resolveGitHub(ctx, entry.Name, includePrereleases)
 	case "docker":
-		return r.resolveDocker(ctx, entry.Name, entry.CurrentVersion, includePrereleases)
+		return r.resolveDockerCandidate(ctx, entry, includePrereleases)
 	default:
 		return Resolution{}, fmt.Errorf("unsupported datasource %q", entry.Datasource)
 	}
-}
-
-func (r *HTTPResolver) resolveGo(ctx context.Context, name string, includePrereleases bool) (Resolution, error) {
-	escaped, err := module.EscapePath(name)
-	if err != nil {
-		return Resolution{}, err
-	}
-	body, listErr := r.get(ctx, r.endpoint(r.GoProxy, escaped+"/@v/list"), false)
-	versions := strings.Fields(string(body))
-	latestBody, latestErr := r.get(ctx, r.endpoint(r.GoProxy, escaped+"/@latest"), false)
-	if latestErr == nil {
-		var latest struct {
-			Version string `json:"Version"`
-		}
-		if err := json.Unmarshal(latestBody, &latest); err != nil {
-			return Resolution{}, err
-		}
-		if latest.Version != "" {
-			versions = append(versions, latest.Version)
-		}
-	}
-	if len(versions) == 0 {
-		if listErr != nil {
-			return Resolution{}, listErr
-		}
-		return Resolution{}, latestErr
-	}
-	return chooseGoVersion(versions, includePrereleases)
-}
-
-func (r *HTTPResolver) resolveCrate(ctx context.Context, name string, includePrereleases bool) (Resolution, error) {
-	body, err := r.get(ctx, r.endpoint(r.CratesAPI, "crates/"+url.PathEscape(name)), false)
-	if err != nil {
-		return Resolution{}, err
-	}
-	var response struct {
-		Versions []struct {
-			Number string `json:"num"`
-			Yanked bool   `json:"yanked"`
-		} `json:"versions"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return Resolution{}, err
-	}
-	versions := make([]string, 0, len(response.Versions))
-	for _, version := range response.Versions {
-		if !version.Yanked {
-			versions = append(versions, version.Number)
-		}
-	}
-	return chooseVersion(versions, includePrereleases)
-}
-
-func (r *HTTPResolver) resolveNPM(ctx context.Context, name string, includePrereleases bool) (Resolution, error) {
-	if !includePrereleases {
-		body, err := r.get(ctx, r.endpoint(r.NPMRegistry, url.PathEscape(name)+"/latest"), false)
-		if err != nil {
-			return Resolution{}, err
-		}
-		var latest struct {
-			Version string `json:"version"`
-		}
-		if err := json.Unmarshal(body, &latest); err != nil {
-			return Resolution{}, err
-		}
-		if latest.Version == "" {
-			return Resolution{}, errors.New("npm latest response has no version")
-		}
-		return Resolution{Version: latest.Version}, nil
-	}
-	body, err := r.get(ctx, r.endpoint(r.NPMRegistry, url.PathEscape(name)), false)
-	if err != nil {
-		return Resolution{}, err
-	}
-	var response struct {
-		DistTags map[string]string          `json:"dist-tags"`
-		Versions map[string]json.RawMessage `json:"versions"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return Resolution{}, err
-	}
-	versions := make([]string, 0, len(response.Versions)+1)
-	for version := range response.Versions {
-		versions = append(versions, version)
-	}
-	if latest := response.DistTags["latest"]; latest != "" {
-		versions = append(versions, latest)
-	}
-	return chooseVersion(versions, true)
-}
-
-func (r *HTTPResolver) resolveNuGet(ctx context.Context, name string, includePrereleases bool) (Resolution, error) {
-	endpoint := r.endpoint(r.NuGetAPI, strings.ToLower(url.PathEscape(name))+"/index.json")
-	body, err := r.get(ctx, endpoint, false)
-	if err != nil {
-		return Resolution{}, err
-	}
-	var response struct {
-		Versions []string `json:"versions"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return Resolution{}, err
-	}
-	return chooseVersion(response.Versions, includePrereleases)
-}
-
-func (r *HTTPResolver) resolveGitHub(ctx context.Context, name string, includePrereleases bool) (Resolution, error) {
-	if strings.Count(name, "/") != 1 {
-		return Resolution{}, fmt.Errorf("invalid GitHub repository %q", name)
-	}
-	tag, err := r.latestGitHubTag(ctx, name, includePrereleases)
-	if err != nil {
-		return Resolution{}, err
-	}
-	digest, err := r.githubTagDigest(ctx, name, tag)
-	if err != nil {
-		return Resolution{}, err
-	}
-	return Resolution{Version: tag, Digest: digest}, nil
-}
-
-func (r *HTTPResolver) latestGitHubTag(ctx context.Context, name string, includePrereleases bool) (string, error) {
-	var err error
-	if !includePrereleases {
-		body, requestErr := r.get(ctx, r.endpoint(r.GitHubAPI, "repos/"+name+"/releases/latest"), true)
-		err = requestErr
-		if err == nil {
-			var release struct {
-				Tag string `json:"tag_name"`
-			}
-			if decodeErr := json.Unmarshal(body, &release); decodeErr != nil {
-				return "", decodeErr
-			}
-			if release.Tag != "" {
-				return release.Tag, nil
-			}
-		}
-	}
-	endpoint := r.endpoint(r.GitHubAPI, "repos/"+name+"/tags")
-	var versions []string
-	const pageSize = 100
-	const pageLimit = 100
-	for page := 1; page <= pageLimit; page++ {
-		pageURL := endpoint + "?per_page=" + strconv.Itoa(pageSize) + "&page=" + strconv.Itoa(page)
-		body, headers, tagsErr := r.getWithHeaders(ctx, pageURL, true)
-		if tagsErr != nil {
-			if err != nil {
-				return "", err
-			}
-			return "", tagsErr
-		}
-		var tags []struct {
-			Name string `json:"name"`
-		}
-		if decodeErr := json.Unmarshal(body, &tags); decodeErr != nil {
-			return "", decodeErr
-		}
-		for _, entry := range tags {
-			versions = append(versions, entry.Name)
-		}
-		if len(tags) < pageSize || githubNextLink(headers.Get("Link")) == "" {
-			break
-		}
-		if page == pageLimit {
-			return "", errors.New("GitHub tags pagination exceeds page limit")
-		}
-	}
-	chosen, chooseErr := chooseVersion(versions, includePrereleases)
-	return chosen.Version, chooseErr
-}
-
-func githubNextLink(link string) string {
-	for _, part := range strings.Split(link, ",") {
-		fields := strings.Split(part, ";")
-		if len(fields) < 2 {
-			continue
-		}
-		target := strings.TrimSpace(fields[0])
-		if !strings.HasPrefix(target, "<") || !strings.HasSuffix(target, ">") {
-			continue
-		}
-		for _, parameter := range fields[1:] {
-			key, value, ok := strings.Cut(strings.TrimSpace(parameter), "=")
-			if !ok || !strings.EqualFold(key, "rel") {
-				continue
-			}
-			for _, relation := range strings.Fields(strings.Trim(value, `"`)) {
-				if relation == "next" {
-					return strings.Trim(target, "<>")
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func (r *HTTPResolver) githubTagDigest(ctx context.Context, name, tag string) (string, error) {
-	endpoint := r.endpoint(r.GitHubAPI, "repos/"+name+"/git/ref/tags/"+url.PathEscape(tag))
-	body, err := r.get(ctx, endpoint, true)
-	if err != nil {
-		return "", err
-	}
-	var ref struct {
-		Object struct {
-			Type string `json:"type"`
-			SHA  string `json:"sha"`
-		} `json:"object"`
-	}
-	if err := json.Unmarshal(body, &ref); err != nil {
-		return "", err
-	}
-	for depth := 0; ref.Object.Type == "tag" && depth < 5; depth++ {
-		body, err = r.get(ctx, r.endpoint(r.GitHubAPI, "repos/"+name+"/git/tags/"+ref.Object.SHA), true)
-		if err != nil {
-			return "", err
-		}
-		if err := json.Unmarshal(body, &ref); err != nil {
-			return "", err
-		}
-	}
-	if ref.Object.Type != "commit" || len(ref.Object.SHA) != 40 {
-		return "", fmt.Errorf("tag %s for %s did not resolve to a commit", tag, name)
-	}
-	return ref.Object.SHA, nil
-}
-
-func (r *HTTPResolver) resolveDocker(ctx context.Context, name, current string, includePrereleases bool) (Resolution, error) {
-	if strings.Contains(strings.Split(name, "/")[0], ".") || strings.Contains(name, ":") {
-		return Resolution{}, fmt.Errorf("registry for %s is not supported yet", name)
-	}
-	if !strings.Contains(name, "/") {
-		name = "library/" + name
-	}
-	endpoint := r.endpoint(r.DockerHub, "repositories/"+name+"/tags?page_size=100")
-	tags, err := r.dockerTags(ctx, endpoint)
-	if err != nil {
-		return Resolution{}, err
-	}
-	suffix := dockerSuffix(current)
-	minimumDots := dockerVersionDots(current)
-	filtered := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		if dockerSuffix(tag) == suffix && dockerVersionDots(tag) >= minimumDots {
-			filtered = append(filtered, tag)
-		}
-	}
-	return chooseVersion(filtered, includePrereleases || suffix != "")
-}
-
-func (r *HTTPResolver) dockerTags(ctx context.Context, endpoint string) ([]string, error) {
-	var tags []string
-	for page := 0; endpoint != "" && page < 5; page++ {
-		body, err := r.get(ctx, endpoint, false)
-		if err != nil {
-			return nil, err
-		}
-		var response struct {
-			Next    string `json:"next"`
-			Results []struct {
-				Name string `json:"name"`
-			} `json:"results"`
-		}
-		if err := json.Unmarshal(body, &response); err != nil {
-			return nil, err
-		}
-		for _, result := range response.Results {
-			tags = append(tags, result.Name)
-		}
-		endpoint = response.Next
-	}
-	return tags, nil
-}
-
-func dockerVersionDots(tag string) int {
-	match := numericVersion.FindStringSubmatch(tag)
-	if match == nil {
-		return -1
-	}
-	return strings.Count(match[1], ".")
-}
-
-func dockerSuffix(tag string) string {
-	match := numericVersion.FindStringSubmatch(tag)
-	if match == nil {
-		return ""
-	}
-	return match[2]
 }
 
 func chooseVersion(versions []string, includePrereleases bool) (Resolution, error) {
@@ -362,25 +71,6 @@ func chooseVersion(versions []string, includePrereleases bool) (Resolution, erro
 	}
 	if chosen == "" {
 		return Resolution{}, errors.New("no compatible stable version found")
-	}
-	return Resolution{Version: chosen}, nil
-}
-
-func chooseGoVersion(versions []string, includePrereleases bool) (Resolution, error) {
-	var chosen string
-	for _, version := range versions {
-		if !semver.IsValid(version) {
-			continue
-		}
-		if !includePrereleases && semver.Prerelease(version) != "" && !module.IsPseudoVersion(version) {
-			continue
-		}
-		if chosen == "" || semver.Compare(version, chosen) > 0 {
-			chosen = version
-		}
-	}
-	if chosen == "" {
-		return Resolution{}, errors.New("no compatible Go module version found")
 	}
 	return Resolution{Version: chosen}, nil
 }
@@ -422,7 +112,7 @@ func (r *HTTPResolver) getWithHeaders(ctx context.Context, endpoint string, gith
 		if body, readErr := io.ReadAll(limited); readErr == nil && len(body) > 0 {
 			message += ": " + strings.TrimSpace(string(body))
 		}
-		return nil, nil, errors.New(message)
+		return nil, nil, &datasourceHTTPError{status: response.StatusCode, message: message}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, (32<<20)+1))
 	if err != nil {
@@ -433,6 +123,13 @@ func (r *HTTPResolver) getWithHeaders(ctx context.Context, endpoint string, gith
 	}
 	return body, response.Header.Clone(), nil
 }
+
+type datasourceHTTPError struct {
+	status  int
+	message string
+}
+
+func (e *datasourceHTTPError) Error() string { return e.message }
 
 func (r *HTTPResolver) endpoint(base, path string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")

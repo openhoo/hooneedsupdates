@@ -34,7 +34,7 @@ maximum update count; repository checks and reviews remain authoritative.
 | npm/Bun | `package.json` | npm registry | Direct dependency ranges |
 | NuGet | `*.csproj`, `Directory.Packages.props` | NuGet flat container | `PackageReference` and `PackageVersion` |
 | GitHub Actions | workflows and `action.yml` | GitHub releases/tags | Immutable SHA plus release comment |
-| Containers | `Dockerfile*` | Docker Hub | Version-like tags on the same image channel |
+| Containers | `Dockerfile*` | Docker Hub | Version tags and tag + SHA256 pins on the same image variant |
 | Custom | configured regex capture | GitHub releases | Named `currentValue` capture |
 
 Lockfile mode supports `go.sum`/`go.work.sum`, `Cargo.lock`, `bun.lock`/
@@ -105,7 +105,7 @@ Exit behavior:
 
 - Default `--fail-on never`: findings are reported and exit status remains zero.
 - `--fail-on outdated`: exits `2` when applicable updates exist.
-- `--fail-on unresolved`: exits `3` when a datasource could not be resolved.
+- `--fail-on unresolved`: exits `3` when selected inventory is unresolved, blocked, or unsupported.
 - Invalid input or configuration exits `2`; operational failure exits `1`.
 
 Example configuration:
@@ -153,13 +153,32 @@ customManagers:
       - 'HOOVERSION_VERSION:\s*["'']?(?P<currentValue>[^\s"'']+)'
 ```
 
-Configuration rejects unknown fields, invalid regular expressions, unknown
-managers, unreasoned ignores, and custom matchers without a named
+Configuration must be a regular file no larger than 1 MiB and contain exactly
+one YAML document. It rejects unknown fields, invalid regular expressions,
+unknown managers, unreasoned ignores, and custom matchers without a named
 `currentValue` capture. Auto-merge is rejected for draft PRs or unsafe policy
 values. Fleet runs persist GitHub cooldowns when `rateLimit.stateFile` is set;
 longer waits return `deferred` results without failing the scheduled run. See
 [repository automation](docs/repository-automation.md) for exact PR lifecycle,
 authentication, retry policy, and recovery behavior.
+
+## Saved plans and update policy
+
+```sh
+hooneedsupdates scan --plan /tmp/updates.json --lockfiles .
+hooneedsupdates apply --plan /tmp/updates.json --diff .
+hooneedsupdates apply --plan /tmp/updates.json --write .
+```
+
+Saved apply writes the exact reviewed bytes offline and rejects any changed
+source or newly appeared target. Incomplete inventory refuses source writes.
+Optional `packageRules` configure named groups, shared versions, release age,
+channels, and inclusive version windows. Selection cannot split a family or hide
+blocked/unsupported inputs behind an update-type filter.
+
+See [saved plans and recovery](docs/saved-plans.md) and
+[groups and compatibility policy](docs/update-policy.md). The wire schemas live
+in [schemas/](schemas/); version-1 YAML configuration remains compatible.
 
 ## GitHub Actions
 
@@ -186,9 +205,15 @@ ID and private-key secret are configured.
 - Requests have a configured timeout and bounded concurrency.
 - Fixture, `testdata`, oracle, VCS, vendor, build, and package cache trees are
   excluded by default.
-- Symlinked manifests are never followed.
+- Symlinked manifests and non-regular inputs are skipped. Explicitly selected
+  root aliases are supported; selected manifests exceeding 5 MiB fail the scan.
+- GitHub Actions are extracted from workflow structure, so action-like text in
+  scripts and descriptions cannot become an edit. OpenHoo version inputs belong
+  to the same step as their action reference.
+- Cancellation stops discovery and resolution without emitting a partial report.
 - Apply verifies original byte ranges and rejects overlapping edits.
-- Files are replaced atomically while preserving their permission bits.
+- Files are replaced while preserving supported permission bits; Windows
+  directory durability and ACL limits are documented in the recovery guide.
 - Lockfile mode disables lifecycle scripts and Git hooks, isolates package
   caches, rejects Git content filters, and accepts only expected paths.
 - NuGet lockfiles come from sanitized static project graphs; original MSBuild
@@ -198,9 +223,11 @@ ID and private-key secret are configured.
   remote-read-only.
 - GitHub REST, GraphQL, and release-resolution requests share bounded retries;
   longer primary or secondary rate-limit cooldowns persist atomically.
-- Managed branches use exact-SHA force-with-lease and are never overwritten
+- GitHub API requests and redirects remain on the configured HTTPS host.
+- Managed branches use exact-SHA force-with-lease, including an absence lease
+  for first publication, and are never overwritten
   without matching PR ownership evidence.
-- Any unexpected changed path, unresolved dependency, or non-reproducible
+- Any unexpected changed path, unresolved/blocked/unsupported dependency, or non-reproducible
   lockfile result stops that repository before publication.
 - Auto-merge uses GitHub's native request and is disabled when a new plan no
   longer satisfies policy.
@@ -213,9 +240,13 @@ Report vulnerabilities through [GitHub private vulnerability reporting](https://
 
 Current source tree implements deterministic inventory, reviewed manifest edits,
 reproducible Go, Cargo, Bun/npm, and static NuGet lockfile changes, plus the
-idempotent GitHub update-PR lifecycle with resumable rate-limit state. Grouped
-update families, minimum-age policy, GitLab automation, and organization-wide
-dashboards remain tracked in [ROADMAP.md](ROADMAP.md).
+idempotent GitHub update-PR lifecycle with resumable rate-limit state. Saved offline plans, grouped update families, minimum-age and compatibility
+policy, container digest updates, and native Windows qualification are included
+in the current source tree. GitLab automation, signed evidence, security-update
+priority, and organization dashboards remain in [ROADMAP.md](ROADMAP.md).
+
+The [October 2026 review](docs/review-2026-10-03.md) records the reliability fixes,
+verification evidence, compatibility boundaries, and prioritized follow-up work.
 
 The Hoostack alignment review that led to this project is recorded in
 [docs/hoostack-audit-2026-08-31.md](docs/hoostack-audit-2026-08-31.md).

@@ -95,3 +95,74 @@ func runGitTest(t *testing.T, root string, arguments ...string) {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
 }
+
+func TestGitIgnoresInheritedRepositoryAndIndex(t *testing.T) {
+	root := gitRepository(t)
+	other := gitRepository(t)
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	writeTestFile(t, root, "expected.txt", "updated\n")
+	vcs := gitVCS{}
+	if _, _, err := vcs.Commit(context.Background(), root, "chore: update", "Bot", "bot@example.com", []update.AppliedFile{{Path: "expected.txt"}}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(other, "expected.txt"))
+	if err != nil || string(data) != "original\n" {
+		t.Fatalf("other repository changed: %q %v", data, err)
+	}
+}
+
+func TestGitPushRequiresAbsentBranchOnFirstPublication(t *testing.T) {
+	root := gitRepository(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGitTest(t, root, "init", "--bare", remote)
+	runGitTest(t, root, "remote", "set-url", "origin", remote)
+	vcs := gitVCS{}
+	if err := vcs.Push(context.Background(), root, "bot/updates", ""); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "expected.txt", "updated\n")
+	if _, _, err := vcs.Commit(context.Background(), root, "chore: update", "Bot", "bot@example.com", []update.AppliedFile{{Path: "expected.txt"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.Push(context.Background(), root, "bot/updates", ""); err == nil {
+		t.Fatal("existing branch overwritten without lease")
+	}
+}
+
+func TestGitDeletionLeasePreservesConcurrentChanges(t *testing.T) {
+	root := gitRepository(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGitTest(t, root, "init", "--bare", remote)
+	runGitTest(t, root, "remote", "set-url", "origin", remote)
+	vcs := gitVCS{}
+	first, err := vcs.Head(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.Push(context.Background(), root, "bot/updates", ""); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "expected.txt", "human change\n")
+	next, _, err := vcs.Commit(context.Background(), root, "chore: change", "Human", "human@example.com", []update.AppliedFile{{Path: "expected.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.Push(context.Background(), root, "bot/updates", first); err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.DeleteBranch(context.Background(), root, "bot/updates", first); err == nil {
+		t.Fatal("stale deletion removed concurrent commit")
+	}
+	command := exec.Command("git", "--git-dir", remote, "rev-parse", "refs/heads/bot/updates")
+	if output, err := command.Output(); err != nil || strings.TrimSpace(string(output)) != next {
+		t.Fatalf("human branch lost: %s %v", output, err)
+	}
+	if err := vcs.DeleteBranch(context.Background(), root, "bot/updates", next); err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.DeleteBranch(context.Background(), root, "bot/updates", ""); err == nil {
+		t.Fatal("absence lease accepted for deletion")
+	}
+}

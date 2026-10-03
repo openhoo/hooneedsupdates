@@ -145,3 +145,63 @@ func TestLoadAutomationPreservesSafeDefaults(t *testing.T) {
 		t.Fatalf("defaults were not preserved: %+v", cfg.Automation)
 	}
 }
+
+func TestLoadRejectsTrailingYAMLDocuments(t *testing.T) {
+	for _, tail := range []string{"---\nversion: 1\n", "---\n", "---\nunknown: true\n", "---\n[invalid\n"} {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, FileName), []byte("version: 1\n"+tail), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Load(root, ""); err == nil {
+			t.Fatalf("trailing document accepted: %q", tail)
+		}
+	}
+}
+
+func TestLoadRejectsNonRegularAndOversizedConfiguration(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.yaml")
+	if err := os.WriteFile(target, []byte("version: 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, FileName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, _, err := Load(root, ""); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlink accepted: %v", err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(link, []byte(strings.Repeat(" ", maxConfigSize+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load(root, ""); err == nil || !strings.Contains(err.Error(), "1 MiB") {
+		t.Fatalf("oversized config accepted: %v", err)
+	}
+}
+
+func TestPackageRuleValidation(t *testing.T) {
+	for _, rule := range []PackageRule{
+		{Dependency: "["}, {Dependency: "a", Managers: []string{"unknown"}},
+		{Dependency: "a", SharedVersion: true}, {Dependency: "a", Group: "bad/group"},
+		{Dependency: "a", Channel: "latest"}, {Dependency: "a", MinimumAge: "-1h"},
+		{Dependency: "a", MinimumAge: "8761h"}, {Dependency: "a", MinVersion: "banana"},
+		{Dependency: "a", MinVersion: "2.0.0", MaxVersion: "1.0.0"},
+	} {
+		cfg := Default()
+		cfg.PackageRules = []PackageRule{rule}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid rule accepted: %+v", rule)
+		}
+	}
+	cfg := Default()
+	cfg.PackageRules = []PackageRule{{Dependency: "^family/", Managers: []string{"npm"}, Group: "family", SharedVersion: true, MinimumAge: "48h", Channel: "stable", MinVersion: "1.0.0", MaxVersion: "2.0.0"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.MatchingRules("npm", "family/a")) != 1 || len(cfg.MatchingRules("cargo", "family/a")) != 0 {
+		t.Fatal("rule manager matching incorrect")
+	}
+}
