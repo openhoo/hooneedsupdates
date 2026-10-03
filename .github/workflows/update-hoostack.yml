@@ -38,7 +38,7 @@ jobs:
       - name: Create repository-scoped GitHub App token
         if: steps.configured.outputs.value == 'true'
         id: app-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.HOONEEDSUPDATES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HOONEEDSUPDATES_APP_PRIVATE_KEY }}
@@ -62,7 +62,7 @@ jobs:
 
       - name: Restore GitHub rate-limit state
         if: steps.configured.outputs.value == 'true'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .hooneedsupdates/rate-limit.json
           key: hooneedsupdates-rate-limit-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -87,7 +87,7 @@ jobs:
           always() &&
           steps.configured.outputs.value == 'true' &&
           hashFiles('.hooneedsupdates/rate-limit.json') != ''
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .hooneedsupdates/rate-limit.json
           key: hooneedsupdates-rate-limit-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}

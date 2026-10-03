@@ -23,6 +23,33 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- Support macOS root aliases in reproducible lockfile updates.
+- Stop canceled scans without reporting incomplete findings or scheduling new
+  resolutions; reject invalid concurrency before launching workers.
+- Extract action references and OpenHoo version inputs from YAML structure,
+  keeping scripts and unrelated steps outside the update plan.
+- Bound configuration and manifest reads, reject trailing YAML documents, and
+  prune excluded directory trees.
+- Correct Cargo zero-patch and prerelease compatibility; discover npm and NuGet
+  prerelease/build versions; reject malformed upstream versions.
+- Complete Docker tag pagination within a bounded same-registry traversal.
+- Share bounded GitHub retries with standalone scans and preserve rate-limit
+  deferrals when release discovery falls back to tags.
+- Constrain GitHub requests and redirects to the configured HTTPS host.
+- Isolate automation Git commands from inherited repository settings and require
+  an absence lease when publishing a new managed branch.
+- Respect existing draft PRs when deciding whether to enable auto-merge.
+- Return successful exit status for subcommand help.
+
+### Maintenance
+
+- Refresh workflow tool versions and immutable action revisions using two
+  reproducible updater worktrees.
+- Add focused macOS filesystem regression CI and cancel superseded CI runs.
+- Record the October 2026 review and compatibility follow-up work.
+
 ### Features
 
 - Add read-only-by-default multi-repository update reconciliation with exact-SHA

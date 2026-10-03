@@ -19,7 +19,15 @@ after reviewing the plan.
 
 Unrelated dirty files are allowed because the detached worktrees start from
 `HEAD`. Dirty planned manifests or lockfiles are rejected, so no local work is
-silently replaced.
+silently replaced. Root aliases such as macOS `/var` and `/private/var` are
+compared by directory identity; a subdirectory still cannot stand in for the
+repository root. Inherited Git repository and index overrides cannot redirect
+these operations to another checkout.
+
+A dependency requiring a newer Go directive can cause `go mod tidy` to change
+`go.mod` beyond the approved version edit. This is rejected before source writes.
+Upgrade the toolchain requirement separately and review its compatibility impact
+before retrying the dependency update.
 
 ## Manager commands
 

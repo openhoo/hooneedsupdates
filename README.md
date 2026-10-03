@@ -153,8 +153,9 @@ customManagers:
       - 'HOOVERSION_VERSION:\s*["'']?(?P<currentValue>[^\s"'']+)'
 ```
 
-Configuration rejects unknown fields, invalid regular expressions, unknown
-managers, unreasoned ignores, and custom matchers without a named
+Configuration must be a regular file no larger than 1 MiB and contain exactly
+one YAML document. It rejects unknown fields, invalid regular expressions,
+unknown managers, unreasoned ignores, and custom matchers without a named
 `currentValue` capture. Auto-merge is rejected for draft PRs or unsafe policy
 values. Fleet runs persist GitHub cooldowns when `rateLimit.stateFile` is set;
 longer waits return `deferred` results without failing the scheduled run. See
@@ -186,7 +187,12 @@ ID and private-key secret are configured.
 - Requests have a configured timeout and bounded concurrency.
 - Fixture, `testdata`, oracle, VCS, vendor, build, and package cache trees are
   excluded by default.
-- Symlinked manifests are never followed.
+- Symlinked manifests and non-regular inputs are skipped. Explicitly selected
+  root aliases are supported; selected manifests exceeding 5 MiB fail the scan.
+- GitHub Actions are extracted from workflow structure, so action-like text in
+  scripts and descriptions cannot become an edit. OpenHoo version inputs belong
+  to the same step as their action reference.
+- Cancellation stops discovery and resolution without emitting a partial report.
 - Apply verifies original byte ranges and rejects overlapping edits.
 - Files are replaced atomically while preserving their permission bits.
 - Lockfile mode disables lifecycle scripts and Git hooks, isolates package
@@ -198,7 +204,9 @@ ID and private-key secret are configured.
   remote-read-only.
 - GitHub REST, GraphQL, and release-resolution requests share bounded retries;
   longer primary or secondary rate-limit cooldowns persist atomically.
-- Managed branches use exact-SHA force-with-lease and are never overwritten
+- GitHub API requests and redirects remain on the configured HTTPS host.
+- Managed branches use exact-SHA force-with-lease, including an absence lease
+  for first publication, and are never overwritten
   without matching PR ownership evidence.
 - Any unexpected changed path, unresolved dependency, or non-reproducible
   lockfile result stops that repository before publication.
@@ -216,6 +224,9 @@ reproducible Go, Cargo, Bun/npm, and static NuGet lockfile changes, plus the
 idempotent GitHub update-PR lifecycle with resumable rate-limit state. Grouped
 update families, minimum-age policy, GitLab automation, and organization-wide
 dashboards remain tracked in [ROADMAP.md](ROADMAP.md).
+
+The [October 2026 review](docs/review-2026-10-03.md) records the reliability fixes,
+verification evidence, compatibility boundaries, and prioritized follow-up work.
 
 The Hoostack alignment review that led to this project is recorded in
 [docs/hoostack-audit-2026-08-31.md](docs/hoostack-audit-2026-08-31.md).

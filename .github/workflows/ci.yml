@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  HOOVERSION_VERSION: 1.1.1
+  HOOVERSION_VERSION: 1.1.2
 
 jobs:
   commits:
@@ -26,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Lint Conventional Commits
-        uses: openhoo/hooversion/actions/lint@ac503b23b9b36ebbf39ee6103713c81f1f18b64d # v1.1.1
+        uses: openhoo/hooversion/actions/lint@f0a37cca22997993ca6416010b81ca197a3ac580 # v1.1.2
         with:
           version: ${{ env.HOOVERSION_VERSION }}
 
@@ -83,20 +83,20 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Enforce Hoolicy policy
-        uses: openhoo/hoolicy/actions/check@46529a99335938e7284f11099bf15f7e1800e6f5 # v0.3.1
+        uses: openhoo/hoolicy/actions/check@2175cd50a816e90b37a0395d6bb93e6ce729c256 # v0.4.0
         with:
-          version: 0.3.1
+          version: 0.4.0
       - name: Scan with Hooray
-        uses: openhoo/hooray/actions/scan@f2b28d71398749142f4d9366b0427369f3af6e02 # v0.6.5
+        uses: openhoo/hooray/actions/scan@7f706fe4ae06f9a2408dc9d0abb78048d2366db7 # v0.9.0
         with:
-          version: 0.6.5
+          version: 0.9.0
           policy: hooray-policy.yaml
           format: table
           output: ''
       - name: Analyze with Hoonarqube
-        uses: openhoo/hoonarqube/actions/analyze@03b34bc8957995959d43531e82130a2c95bf01fa # v0.3.1
+        uses: openhoo/hoonarqube/actions/analyze@1b08eba7832f32c6ed5233e51d725092c6e8de77 # v0.10.4
         with:
-          version: 0.3.1
+          version: 0.10.4
           paths: |
             cmd
             internal
