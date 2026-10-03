@@ -359,3 +359,17 @@ func (v *fakeVCS) Push(_ context.Context, _ string, branch, lease string) error 
 	v.pushes = append(v.pushes, fakePush{branch: branch, lease: lease})
 	return nil
 }
+
+func TestRunnerNeverEnablesAutoMergeForExistingDraft(t *testing.T) {
+	host := fixtureHost()
+	pull := pullRequest{Number: 9, NodeID: "PR_9", Body: managedMarker, State: "open", Draft: true}
+	pull.Head.SHA = strings.Repeat("c", 40)
+	pull.Base.Ref = "main"
+	host.pulls = []pullRequest{pull}
+	host.refSHA, host.refExists = pull.Head.SHA, true
+	vcs := &fakeVCS{baseSHA: strings.Repeat("a", 40), headSHA: strings.Repeat("d", 40)}
+	result := fixtureRunner(host, vcs, fixtureUpdate("patch"), true).Run(context.Background(), []string{"openhoo/tool"})[0]
+	if result.Error != "" || result.AutoMergeEligible || host.enableCalls != 0 || !strings.Contains(result.AutoMergeReason, "draft") {
+		t.Fatalf("result=%+v enables=%d", result, host.enableCalls)
+	}
+}

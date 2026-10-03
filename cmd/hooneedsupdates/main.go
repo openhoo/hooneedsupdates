@@ -67,6 +67,9 @@ func runUpdateRepos(ctx context.Context, args []string, stdout, stderr io.Writer
 	format := flags.String("format", "table", "table or json")
 	write := flags.Bool("write", false, "push managed branches and create, update, or close pull requests")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *format != "table" && *format != "json" {
@@ -219,6 +222,9 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	failOn := flags.String("fail-on", "never", "never, outdated, or unresolved")
 	showAll := flags.Bool("all", false, "include current dependencies in table output")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *format != "table" && *format != "json" {
@@ -262,6 +268,9 @@ func runApply(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	write := flags.Bool("write", false, "write the reviewed update plan")
 	lockfiles := flags.Bool("lockfiles", false, "regenerate supported lockfiles reproducibly in isolated Git worktrees")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	root, ok := singleRoot(flags.Args(), stderr)
@@ -320,6 +329,9 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	root, ok := singleRoot(flags.Args(), stderr)
@@ -380,10 +392,19 @@ func scanWithGitHubClient(
 	}
 	client := &http.Client{Timeout: timeout}
 	resolver := update.NewHTTPResolver(client, token)
-	resolver.GitHubClient = github
 	if endpoint := os.Getenv("GITHUB_API_URL"); endpoint != "" {
 		resolver.GitHubAPI = endpoint
 	}
+	if github == nil {
+		maxWait, _ := time.ParseDuration(cfg.Automation.RateLimit.MaxWait)
+		github, err = githubapi.New(client, resolver.GitHubAPI, githubapi.Options{
+			MaxRetries: cfg.Automation.RateLimit.MaxRetries, MaxWait: maxWait,
+		})
+		if err != nil {
+			return update.Report{}, config.Config{}, err
+		}
+	}
+	resolver.GitHubClient = github
 	report, err := (update.Scanner{Config: cfg, Resolver: resolver}).Scan(ctx, absRoot)
 	return report, cfg, err
 }

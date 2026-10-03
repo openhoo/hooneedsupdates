@@ -199,6 +199,9 @@ func (r *Runner) handleUpdates(ctx context.Context, state *repositoryState) Resu
 	result.AutoMergeEligible, result.AutoMergeReason = autoMergeDecision(
 		r.settings, state.repository, state.report,
 	)
+	if state.openPull != nil && state.openPull.Draft {
+		result.AutoMergeEligible, result.AutoMergeReason = false, "pull request is a draft"
+	}
 	body := pullBody(state.name, result, state.report, r.settings.Lockfiles)
 	if !r.write {
 		return r.previewUpdate(state, result, body)
@@ -448,6 +451,15 @@ func autoMergeDecision(settings config.Automation, repository repository, report
 	policy := settings.AutoMerge
 	if !policy.Enabled {
 		return false, "disabled by configuration"
+	}
+	if settings.Draft {
+		return false, "draft pull requests cannot auto-merge"
+	}
+	if policy.RequireLockfiles && !settings.Lockfiles {
+		return false, "auto-merge policy requires lockfile regeneration"
+	}
+	if report.Summary.Unresolved > 0 || report.Summary.Outdated == 0 {
+		return false, "auto-merge requires a complete plan with outdated dependencies"
 	}
 	if !repository.AllowAutoMerge {
 		return false, "repository does not allow native GitHub auto-merge"

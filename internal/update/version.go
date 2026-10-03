@@ -22,7 +22,7 @@ func normalizeVersion(value string) string {
 		parts = append(parts, "0")
 	}
 	version := "v" + strings.Join(parts, ".")
-	if suffix := match[2]; suffix != "" && strings.HasPrefix(suffix, "-") {
+	if suffix := match[2]; suffix != "" {
 		version += suffix
 	}
 	if !semver.IsValid(version) {
@@ -79,12 +79,17 @@ func constraintAllowsLatest(candidate Candidate, latest string) bool {
 	if match == nil {
 		return false
 	}
-	current := normalizeVersion(match[0])
+	current := normalizeVersion(requirement)
 	target := normalizeVersion(latest)
 	if current == "" || target == "" || semver.Compare(target, current) < 0 {
 		return false
 	}
 	parts := strings.Split(match[1], ".")
+	// Cargo prereleases require an explicit prerelease with the same core.
+	if semver.Prerelease(target) != "" && (semver.Prerelease(current) == "" ||
+		strings.SplitN(semver.Canonical(target), "-", 2)[0] != strings.SplitN(semver.Canonical(current), "-", 2)[0]) {
+		return false
+	}
 	currentMajor := semver.Major(current)
 	if strings.HasPrefix(requirement, "~") {
 		if len(parts) == 1 {
@@ -97,6 +102,9 @@ func constraintAllowsLatest(candidate Candidate, latest string) bool {
 	}
 	if len(parts) == 1 {
 		return semver.Major(target) == "v0"
+	}
+	if len(parts) == 3 && semver.MajorMinor(current) == "v0.0" {
+		return constrainedVersion.FindString(target) == "v"+match[1]
 	}
 	return semver.MajorMinor(target) == semver.MajorMinor(current)
 }

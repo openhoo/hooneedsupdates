@@ -111,10 +111,8 @@ func (g gitVCS) Commit(
 }
 
 func (g gitVCS) Push(ctx context.Context, root, branch, expectedRemoteSHA string) error {
-	arguments := []string{"push"}
-	if expectedRemoteSHA != "" {
-		arguments = append(arguments, "--force-with-lease=refs/heads/"+branch+":"+expectedRemoteSHA)
-	}
+	// An empty expected SHA asserts absence and protects first publication too.
+	arguments := []string{"push", "--force-with-lease=refs/heads/" + branch + ":" + expectedRemoteSHA}
 	arguments = append(arguments, "origin", "HEAD:refs/heads/"+branch)
 	_, err := g.runRepository(ctx, root, nil, arguments...)
 	return err
@@ -148,12 +146,14 @@ func (g gitVCS) run(
 	if err != nil {
 		return nil, err
 	}
-	command := exec.CommandContext(ctx, executable, arguments...)
+	base := []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "credential.helper="}
+	command := exec.CommandContext(ctx, executable, append(base, arguments...)...)
 	if directory != "" {
 		command.Dir = directory
 	}
 	environment := map[string]string{
 		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_LFS_SKIP_SMUDGE": "1",
 		"GIT_TERMINAL_PROMPT": "0",
 	}
@@ -268,7 +268,7 @@ func cleanEnvironment(overrides map[string]string) []string {
 	var result []string
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if blocked[key] || strings.HasPrefix(key, "GIT_CONFIG_KEY_") || strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
+		if blocked[key] || strings.HasPrefix(key, "GIT_") {
 			continue
 		}
 		result = append(result, entry)

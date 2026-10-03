@@ -2,6 +2,7 @@ package update
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -16,15 +17,16 @@ import (
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
 	"golang.org/x/mod/modfile"
+	"gopkg.in/yaml.v3"
 )
 
 const maxManifestSize = 5 << 20
 
 var (
+	constraintToken  = regexp.MustCompile(`(?i)(v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)`)
 	goRequireLine    = regexp.MustCompile(`(?m)^\s*(?:require\s+)?([^\s]+)\s+(v[^\s]+)(?:\s+//\s*indirect)?\s*$`)
 	actionUse        = regexp.MustCompile(`(?m)^\s*(?:-\s*)?uses:\s*["']?([^@\s"']+)@([^#\s"']+)["']?(?:\s*#\s*([^\s]+))?`)
 	actionVersion    = regexp.MustCompile(`(?m)^\s+version:\s*["']?([^\s"']+)["']?\s*$`)
-	nextStep         = regexp.MustCompile(`(?m)^\s*-\s+(?:name|uses):`)
 	simpleVersion    = regexp.MustCompile(`^[=~^]?v?\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.+-]+)?$`)
 	dockerFrom       = regexp.MustCompile(`(?im)^\s*FROM(?:\s+--platform=[^\s]+)?\s+([^\s:@]+(?:/[^\s:@]+)*):([^\s@]+)(?:\s+AS\s+[^\s]+)?\s*$`)
 	manifestManagers = map[string]string{
@@ -45,12 +47,36 @@ type Extractor struct {
 }
 
 func (e Extractor) Extract() ([]Candidate, error) {
+	return e.ExtractContext(context.Background())
+}
+
+// ExtractContext stops directory traversal when the scan is canceled.
+func (e Extractor) ExtractContext(ctx context.Context) ([]Candidate, error) {
 	root, err := filepath.Abs(e.Root)
 	if err != nil {
 		return nil, err
 	}
+	// The explicitly selected root can be an alias; descendants remain subject
+	// to the manifest symlink boundary enforced below.
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("scan root must be a directory: %s", root)
+	}
 	var candidates []Candidate
-	err = filepath.WalkDir(root, e.walkEntry(root, &candidates))
+	walk := e.walkEntry(root, &candidates)
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return walk(path, entry, walkErr)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +103,7 @@ func (e Extractor) walkEntry(root string, candidates *[]Candidate) fs.WalkDirFun
 		}
 		rel = filepath.ToSlash(rel)
 		if entry.IsDir() {
-			if rel != "." && excludedDirectory(entry.Name()) {
+			if rel != "." && (excludedDirectory(entry.Name()) || e.Config.PathExcluded(rel) || e.Config.PathExcluded(rel+"/")) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -99,7 +125,7 @@ func (e Extractor) extractFile(path, rel string, entry fs.DirEntry) ([]Candidate
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > maxManifestSize {
+	if !info.Mode().IsRegular() {
 		return nil, nil
 	}
 	manager := managerFor(rel, e.Config)
@@ -107,9 +133,24 @@ func (e Extractor) extractFile(path, rel string, entry fs.DirEntry) ([]Candidate
 	if manager == "" && len(custom) == 0 {
 		return nil, nil
 	}
-	data, err := os.ReadFile(path)
+	if info.Size() > maxManifestSize {
+		return nil, fmt.Errorf("manifest %s exceeds 5 MiB limit", rel)
+	}
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, fmt.Errorf("manifest %s changed while opening", rel)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxManifestSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxManifestSize {
+		return nil, fmt.Errorf("manifest %s exceeds 5 MiB limit", rel)
 	}
 	var result []Candidate
 	if manager != "" {
@@ -182,7 +223,7 @@ func extractManager(manager Manager, rel string, data []byte) ([]Candidate, erro
 	case ManagerNuGet:
 		return extractNuGet(rel, data)
 	case ManagerGitHubActions:
-		return extractActions(rel, data), nil
+		return extractActions(rel, data)
 	case ManagerDocker:
 		return extractDocker(rel, data), nil
 	default:
@@ -197,7 +238,9 @@ func extractGoMod(rel string, data []byte) ([]Candidate, error) {
 	}
 	required := make(map[string]string, len(parsed.Require))
 	for _, requirement := range parsed.Require {
-		required[requirement.Mod.Path] = requirement.Mod.Version
+		if !requirement.Indirect {
+			required[requirement.Mod.Path] = requirement.Mod.Version
+		}
 	}
 	var result []Candidate
 	for _, match := range goRequireLine.FindAllSubmatchIndex(data, -1) {
@@ -531,7 +574,7 @@ func extractCargoLine(rel string, data, line []byte, lineSpan byteRange) (Candid
 	}
 	if table {
 		fields, valid := cargoInlineFields(line, valueStart, valueEnd)
-		if !valid || fields == nil || fields["path"].valueEnd != 0 {
+		if !valid || fields == nil || fields["path"].valueEnd != 0 || fields["git"].valueEnd != 0 || fields["registry"].valueEnd != 0 {
 			return Candidate{}, false
 		}
 		versionField, found := fields["version"]
@@ -988,12 +1031,101 @@ func exactConstraint(prefix, suffix, version string) bool {
 	return prefix == "" && suffix == "" && normalizeVersion(version) != ""
 }
 
-func extractActions(rel string, data []byte) []Candidate {
+func extractActions(rel string, data []byte) ([]Candidate, error) {
+	// YAML structure separates executable references from text in run scripts,
+	// descriptions, and unrelated action inputs. Regexes still locate exact bytes.
+	var document yaml.Node
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&document); err != nil {
+		if err == io.EOF {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if err := decoder.Decode(&yaml.Node{}); err != io.EOF {
+		return nil, fmt.Errorf("workflow must contain exactly one YAML document")
+	}
+	uses := yamlMatchesByLine(data, actionUse)
+	versions := yamlMatchesByLine(data, actionVersion)
 	var result []Candidate
-	for _, match := range actionUse.FindAllSubmatchIndex(data, -1) {
-		result = append(result, extractAction(rel, data, match)...)
+	var visit func(*yaml.Node, bool)
+	visit = func(node *yaml.Node, step bool) {
+		if node.Kind == yaml.MappingNode {
+			if step {
+				result = append(result, extractActionMapping(rel, data, node, uses, versions)...)
+			}
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				key, value := node.Content[i].Value, node.Content[i+1]
+				if key == "steps" && value.Kind == yaml.SequenceNode {
+					for _, child := range value.Content {
+						visit(child, true)
+					}
+				} else if key == "jobs" && value.Kind == yaml.MappingNode {
+					for j := 1; j < len(value.Content); j += 2 {
+						visit(value.Content[j], true)
+					}
+				} else if key != "with" && key != "env" && key != "inputs" && key != "outputs" {
+					visit(value, false)
+				}
+			}
+		} else if node.Kind == yaml.DocumentNode || node.Kind == yaml.SequenceNode {
+			for _, child := range node.Content {
+				visit(child, false)
+			}
+		}
+	}
+	visit(&document, false)
+	return result, nil
+}
+
+func yamlMatchesByLine(data []byte, pattern *regexp.Regexp) map[int][]int {
+	lines := lineRanges(data)
+	result := map[int][]int{}
+	for _, match := range pattern.FindAllSubmatchIndex(data, -1) {
+		line := sort.Search(len(lines), func(i int) bool { return lines[i].start > match[2] })
+		result[line] = match
 	}
 	return result
+}
+
+func extractActionMapping(rel string, data []byte, node *yaml.Node, uses, versions map[int][]int) []Candidate {
+	use := yamlMappingValue(node, "uses")
+	if use == nil || use.Kind != yaml.ScalarNode {
+		return nil
+	}
+	match := uses[use.Line]
+	if match == nil || string(data[match[2]:match[3]])+"@"+string(data[match[4]:match[5]]) != use.Value {
+		return nil
+	}
+	entries := extractAction(rel, data, match)
+	if len(entries) == 0 || !strings.HasPrefix(entries[0].Name, "openhoo/") {
+		return entries
+	}
+	version := yamlMappingValue(yamlMappingValue(node, "with"), "version")
+	if version == nil || version.Kind != yaml.ScalarNode || normalizeVersion(version.Value) == "" {
+		return entries
+	}
+	versionMatch := versions[version.Line]
+	if versionMatch == nil {
+		return entries
+	}
+	span := byteRange{versionMatch[2], versionMatch[3]}
+	if string(data[span.start:span.end]) == version.Value {
+		entries = append(entries, candidate(ManagerCustom, "github-releases", entries[0].Name, version.Value, rel, data, span))
+	}
+	return entries
+}
+
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func extractAction(rel string, data []byte, match []int) []Candidate {
@@ -1009,9 +1141,6 @@ func extractAction(rel string, data []byte, match []int) []Candidate {
 	ref := string(data[match[4]:match[5]])
 	version := actionDisplayVersion(data, match, ref)
 	result := []Candidate{candidate(ManagerGitHubActions, "github-releases", packageName, version, rel, data, byteRange{match[4], match[5]})}
-	if versionInput, ok := openHooActionVersion(rel, data, match, packageName); ok {
-		result = append(result, versionInput)
-	}
 	return result
 }
 
@@ -1024,26 +1153,6 @@ func actionDisplayVersion(data []byte, match []int, fallback string) string {
 		return comment
 	}
 	return fallback
-}
-
-func openHooActionVersion(rel string, data []byte, match []int, packageName string) (Candidate, bool) {
-	if !strings.HasPrefix(packageName, "openhoo/") {
-		return Candidate{}, false
-	}
-	blockEnd := len(data)
-	if next := nextStep.FindIndex(data[match[1]:]); next != nil {
-		blockEnd = match[1] + next[0]
-	}
-	versionMatch := actionVersion.FindSubmatchIndex(data[match[1]:blockEnd])
-	if versionMatch == nil {
-		return Candidate{}, false
-	}
-	span := byteRange{match[1] + versionMatch[2], match[1] + versionMatch[3]}
-	value := string(data[span.start:span.end])
-	if normalizeVersion(value) == "" {
-		return Candidate{}, false
-	}
-	return candidate(ManagerCustom, "github-releases", packageName, value, rel, data, span), true
 }
 
 func extractDocker(rel string, data []byte) []Candidate {
@@ -1102,7 +1211,7 @@ func candidate(manager Manager, datasource, name, version, rel string, data []by
 }
 
 func splitConstraint(value string) (prefix, suffix, version string) {
-	match := constrainedVersion.FindStringSubmatchIndex(strings.TrimSpace(value))
+	match := constraintToken.FindStringSubmatchIndex(strings.TrimSpace(value))
 	if match == nil {
 		return "", "", value
 	}

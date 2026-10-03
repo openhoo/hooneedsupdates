@@ -145,3 +145,39 @@ func TestLoadAutomationPreservesSafeDefaults(t *testing.T) {
 		t.Fatalf("defaults were not preserved: %+v", cfg.Automation)
 	}
 }
+
+func TestLoadRejectsTrailingYAMLDocuments(t *testing.T) {
+	for _, tail := range []string{"---\nversion: 1\n", "---\n", "---\nunknown: true\n", "---\n[invalid\n"} {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, FileName), []byte("version: 1\n"+tail), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Load(root, ""); err == nil {
+			t.Fatalf("trailing document accepted: %q", tail)
+		}
+	}
+}
+
+func TestLoadRejectsNonRegularAndOversizedConfiguration(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.yaml")
+	if err := os.WriteFile(target, []byte("version: 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, FileName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, _, err := Load(root, ""); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlink accepted: %v", err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(link, []byte(strings.Repeat(" ", maxConfigSize+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load(root, ""); err == nil || !strings.Contains(err.Error(), "1 MiB") {
+		t.Fatalf("oversized config accepted: %v", err)
+	}
+}

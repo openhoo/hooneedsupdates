@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/openhoo/hooneedsupdates/internal/config"
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
 	"github.com/openhoo/hooneedsupdates/internal/update"
 )
 
@@ -181,7 +182,7 @@ func TestScanUsesSelectedGitHubTokenAtResolverEndpoint(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var authorization []string
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				authorization = append(authorization, request.Header.Get("Authorization"))
 				writer.Header().Set("Content-Type", "application/json")
 				switch request.URL.Path {
@@ -206,7 +207,11 @@ func TestScanUsesSelectedGitHubTokenAtResolverEndpoint(t *testing.T) {
 			t.Setenv("GITHUB_API_URL", server.URL)
 			t.Setenv("GH_TOKEN", test.ghToken)
 			t.Setenv("GITHUB_TOKEN", test.githubToken)
-			report, _, err := scan(context.Background(), root, "")
+			github, err := githubapi.New(server.Client(), server.URL, githubapi.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, _, err := scanWithGitHubClient(context.Background(), root, "", github, selectedGitHubToken())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -244,5 +249,33 @@ func TestRunScanRejectsInvalidOptionsBeforeScan(t *testing.T) {
 				t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 			}
 		})
+	}
+}
+
+func TestSubcommandHelpExitsSuccessfullyWithoutSideEffects(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, command := range []string{"scan", "apply", "update-repos", "init"} {
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{command, "--help"}, &stdout, &stderr)
+		if code != 0 || !strings.Contains(stderr.String(), "Usage of "+command) {
+			t.Fatalf("%s: code=%d error=%q", command, code, stderr.String())
+		}
+	}
+	if _, err := os.Stat(config.FileName); !os.IsNotExist(err) {
+		t.Fatalf("help created configuration: %v", err)
+	}
+}
+
+func TestScanRejectsInsecureGitHubEndpointBeforeSendingToken(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
+	defer server.Close()
+	t.Setenv("GITHUB_API_URL", server.URL)
+	t.Setenv("GH_TOKEN", "test-secret")
+	if _, _, err := scan(context.Background(), t.TempDir(), ""); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("error=%v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("token sent to insecure endpoint %d times", calls)
 	}
 }

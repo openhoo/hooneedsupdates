@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,8 @@ import (
 )
 
 const FileName = "hooneedsupdates.yaml"
+
+const maxConfigSize = 1 << 20
 
 var knownManagers = map[string]bool{
 	"gomod": true, "cargo": true, "npm": true, "nuget": true,
@@ -122,9 +125,28 @@ func Load(root, explicit string) (Config, string, error) {
 	if path == "" {
 		return cfg, "", nil
 	}
-	data, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return Config{}, "", err
+	}
+	if !info.Mode().IsRegular() {
+		return Config{}, "", fmt.Errorf("configuration %s must be a regular file", path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return Config{}, "", err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return Config{}, "", fmt.Errorf("configuration %s changed while opening", path)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigSize+1))
+	if err != nil {
+		return Config{}, "", err
+	}
+	if len(data) > maxConfigSize {
+		return Config{}, "", fmt.Errorf("configuration %s exceeds 1 MiB limit", path)
 	}
 	var header struct {
 		Version *int `yaml:"version"`
@@ -139,6 +161,9 @@ func Load(root, explicit string) (Config, string, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return Config{}, "", fmt.Errorf("parse %s: configuration must contain exactly one YAML document", path)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, "", fmt.Errorf("validate %s: %w", path, err)

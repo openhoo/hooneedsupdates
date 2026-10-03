@@ -98,8 +98,23 @@ func New(client *http.Client, apiURL string, options Options) (*Client, error) {
 	if options.MaxWait < 0 {
 		return nil, errors.New("GitHub max wait must not be negative")
 	}
+	// Copy the caller's client so credential confinement does not mutate it.
+	confined := *client
+	checkRedirect := client.CheckRedirect
+	confined.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != "https" || !strings.EqualFold(request.URL.Host, parsed.Host) || request.URL.User != nil {
+			return errors.New("refusing GitHub redirect outside the configured HTTPS host")
+		}
+		if checkRedirect != nil {
+			return checkRedirect(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 GitHub redirects")
+		}
+		return nil
+	}
 	result := &Client{
-		http: client, host: strings.ToLower(parsed.Host),
+		http: &confined, host: strings.ToLower(parsed.Host),
 		stateFile: options.StateFile, maxRetries: options.MaxRetries, maxWait: options.MaxWait,
 		now: time.Now,
 		sleep: func(ctx context.Context, delay time.Duration) error {
@@ -123,7 +138,7 @@ func (c *Client) Do(ctx context.Context, request *http.Request) (*http.Response,
 	if request == nil || request.URL == nil {
 		return nil, errors.New("GitHub request and URL are required")
 	}
-	if !strings.EqualFold(request.URL.Host, c.host) {
+	if request.URL.Scheme != "https" || request.URL.User != nil || !strings.EqualFold(request.URL.Host, c.host) {
 		return nil, fmt.Errorf("refusing GitHub request to unexpected host %q", request.URL.Host)
 	}
 	c.mu.Lock()

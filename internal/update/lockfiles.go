@@ -573,9 +573,15 @@ func repositoryRoot(root string) (string, error) {
 	}
 	repository := filepath.Clean(strings.TrimSpace(string(output)))
 	if repository != filepath.Clean(absRoot) {
-		return "", fmt.Errorf("lockfile mode requires repository root %q, got %q", repository, absRoot)
+		// Git canonicalizes system aliases such as macOS /var -> /private/var.
+		// Compare directory identity while retaining the path bound to the report.
+		requested, requestedErr := os.Stat(absRoot)
+		actual, actualErr := os.Stat(repository)
+		if requestedErr != nil || actualErr != nil || !os.SameFile(requested, actual) {
+			return "", fmt.Errorf("lockfile mode requires repository root %q, got %q", repository, absRoot)
+		}
 	}
-	return repository, nil
+	return absRoot, nil
 }
 
 func validateSourceState(root string, plan regenerationPlan) error {
@@ -737,6 +743,17 @@ func runGit(ctx context.Context, directory, hooksDirectory string, arguments ...
 	base = append(base, "-C", directory)
 	base = append(base, arguments...)
 	process := exec.CommandContext(ctx, executable, base...)
+	// Local repository selection must not be redirected by an enclosing CI job.
+	// Preserve config inputs here so repository content-filter checks can inspect
+	// them before worktree creation; strip only Git's repository overrides.
+	for _, variable := range os.Environ() {
+		key, _, _ := strings.Cut(variable, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX":
+			continue
+		}
+		process.Env = append(process.Env, variable)
+	}
 	output := &limitedBuffer{remaining: maxCommandOutput}
 	process.Stdout = output
 	process.Stderr = output

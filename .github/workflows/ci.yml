@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   HOOVERSION_VERSION: 1.1.1
 
@@ -29,6 +33,7 @@ jobs:
   test:
     name: Test and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,7 +43,7 @@ jobs:
           go-version: '1.27.x'
           cache: true
       - name: Check formatting
-        run: test -z "$(gofmt -l cmd internal)"
+        run: test -z "$(gofmt -l cmd internal scripts actions)"
       - name: Vet
         run: go vet ./...
       - name: Test with race detector
@@ -52,6 +57,21 @@ jobs:
           jq -e '.schemaVersion == 2 and (.planDigest | test("^sha256:[0-9a-f]{64}$")) and .summary.unresolved == 0' update-report.json >/dev/null
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+  macos:
+    name: macOS filesystem regressions
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Check root aliases and lockfile transactions
+        run: go test ./internal/update -run 'Test(RepositoryRoot|ApplyWithLockfiles|LockfilesIgnoreInherited)' -count=1
 
   policy:
     name: Hoostack policy

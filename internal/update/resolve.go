@@ -128,7 +128,7 @@ func (r *HTTPResolver) resolveNPM(ctx context.Context, name string, includePrere
 		if latest.Version == "" {
 			return Resolution{}, errors.New("npm latest response has no version")
 		}
-		return Resolution{Version: latest.Version}, nil
+		return chooseVersion([]string{latest.Version}, false)
 	}
 	body, err := r.get(ctx, r.endpoint(r.NPMRegistry, url.PathEscape(name)), false)
 	if err != nil {
@@ -182,11 +182,14 @@ func (r *HTTPResolver) resolveGitHub(ctx context.Context, name string, includePr
 }
 
 func (r *HTTPResolver) latestGitHubTag(ctx context.Context, name string, includePrereleases bool) (string, error) {
-	var err error
 	if !includePrereleases {
 		body, requestErr := r.get(ctx, r.endpoint(r.GitHubAPI, "repos/"+name+"/releases/latest"), true)
-		err = requestErr
-		if err == nil {
+		if requestErr != nil {
+			var status *datasourceHTTPError
+			if !errors.As(requestErr, &status) || status.status != http.StatusNotFound {
+				return "", requestErr
+			}
+		} else {
 			var release struct {
 				Tag string `json:"tag_name"`
 			}
@@ -194,7 +197,8 @@ func (r *HTTPResolver) latestGitHubTag(ctx context.Context, name string, include
 				return "", decodeErr
 			}
 			if release.Tag != "" {
-				return release.Tag, nil
+				chosen, err := chooseVersion([]string{release.Tag}, false)
+				return chosen.Version, err
 			}
 		}
 	}
@@ -206,9 +210,6 @@ func (r *HTTPResolver) latestGitHubTag(ctx context.Context, name string, include
 		pageURL := endpoint + "?per_page=" + strconv.Itoa(pageSize) + "&page=" + strconv.Itoa(page)
 		body, headers, tagsErr := r.getWithHeaders(ctx, pageURL, true)
 		if tagsErr != nil {
-			if err != nil {
-				return "", err
-			}
 			return "", tagsErr
 		}
 		var tags []struct {
@@ -311,7 +312,20 @@ func (r *HTTPResolver) resolveDocker(ctx context.Context, name, current string, 
 
 func (r *HTTPResolver) dockerTags(ctx context.Context, endpoint string) ([]string, error) {
 	var tags []string
-	for page := 0; endpoint != "" && page < 5; page++ {
+	origin, err := url.Parse(endpoint)
+	if err != nil || origin.Host == "" {
+		return nil, errors.New("invalid Docker Hub endpoint")
+	}
+	seen := map[string]bool{}
+	const pageLimit = 100
+	for page := 0; endpoint != ""; page++ {
+		if page >= pageLimit {
+			return nil, errors.New("Docker tags pagination exceeds page limit")
+		}
+		if seen[endpoint] {
+			return nil, errors.New("Docker tags pagination contains a cycle")
+		}
+		seen[endpoint] = true
 		body, err := r.get(ctx, endpoint, false)
 		if err != nil {
 			return nil, err
@@ -328,7 +342,18 @@ func (r *HTTPResolver) dockerTags(ctx context.Context, endpoint string) ([]strin
 		for _, result := range response.Results {
 			tags = append(tags, result.Name)
 		}
-		endpoint = response.Next
+		endpoint = ""
+		if response.Next != "" {
+			next, err := url.Parse(response.Next)
+			if err != nil {
+				return nil, errors.New("invalid Docker tags pagination URL")
+			}
+			next = origin.ResolveReference(next)
+			if next.Scheme != origin.Scheme || !strings.EqualFold(next.Host, origin.Host) || next.User != nil || next.Fragment != "" {
+				return nil, errors.New("Docker tags pagination leaves the configured registry")
+			}
+			endpoint = next.String()
+		}
 	}
 	return tags, nil
 }
@@ -422,7 +447,7 @@ func (r *HTTPResolver) getWithHeaders(ctx context.Context, endpoint string, gith
 		if body, readErr := io.ReadAll(limited); readErr == nil && len(body) > 0 {
 			message += ": " + strings.TrimSpace(string(body))
 		}
-		return nil, nil, errors.New(message)
+		return nil, nil, &datasourceHTTPError{status: response.StatusCode, message: message}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, (32<<20)+1))
 	if err != nil {
@@ -433,6 +458,13 @@ func (r *HTTPResolver) getWithHeaders(ctx context.Context, endpoint string, gith
 	}
 	return body, response.Header.Clone(), nil
 }
+
+type datasourceHTTPError struct {
+	status  int
+	message string
+}
+
+func (e *datasourceHTTPError) Error() string { return e.message }
 
 func (r *HTTPResolver) endpoint(base, path string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")

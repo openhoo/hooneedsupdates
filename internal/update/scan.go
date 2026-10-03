@@ -27,11 +27,17 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 	if s.Resolver == nil {
 		return Report{}, fmt.Errorf("resolver is required")
 	}
+	if err := s.Config.Validate(); err != nil {
+		return Report{}, fmt.Errorf("invalid scanner configuration: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return Report{}, err
 	}
-	candidates, err := (Extractor{Root: absRoot, Config: s.Config}).Extract()
+	candidates, err := (Extractor{Root: absRoot, Config: s.Config}).ExtractContext(ctx)
 	if err != nil {
 		return Report{}, err
 	}
@@ -74,6 +80,9 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 		go func() {
 			defer workers.Done()
 			for task := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
 				candidate := candidates[task.index]
 				if reason := s.Config.IgnoreReason(string(candidate.Manager), candidate.Name); reason != "" {
 					updates[task.index] = Update{Candidate: candidate, Status: "ignored", Error: reason}
@@ -97,11 +106,19 @@ func (s Scanner) Scan(ctx context.Context, root string) (Report, error) {
 			}
 		}()
 	}
+dispatch:
 	for index := range candidates {
-		jobs <- job{index: index}
+		select {
+		case jobs <- job{index: index}:
+		case <-ctx.Done():
+			break dispatch
+		}
 	}
 	close(jobs)
 	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	if fatalErr != nil {
 		return Report{}, fatalErr
 	}
