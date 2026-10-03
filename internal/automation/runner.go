@@ -101,8 +101,7 @@ func (r *Runner) runRepository(ctx context.Context, name string) (result Result)
 	}
 	result = state.result
 	if err := update.RequireComplete(state.report); err != nil {
-		result.Error = err.Error()
-		return result
+		return r.handleIncomplete(ctx, state, err)
 	}
 	if err := r.loadManagedState(ctx, state); err != nil {
 		return operationalError(result, err)
@@ -111,6 +110,33 @@ func (r *Runner) runRepository(ctx context.Context, name string) (result Result)
 		return r.handleCurrent(ctx, state)
 	}
 	return r.handleUpdates(ctx, state)
+}
+
+// Incomplete inventory cannot authorize a new update, cleanup, or an existing
+// auto-merge request. Inspect ownership before revoking the latter.
+func (r *Runner) handleIncomplete(ctx context.Context, state *repositoryState, incomplete error) Result {
+	result := state.result
+	result.Error = incomplete.Error()
+	result.AutoMergeReason = "incomplete selected update plan"
+	if err := r.loadManagedState(ctx, state); err != nil {
+		return operationalError(result, err)
+	}
+	if state.openPull == nil {
+		return result
+	}
+	setPullResult(&result, *state.openPull)
+	if state.openPull.AutoMerge == nil {
+		return result
+	}
+	result.AutoMergeAction = "would-disable"
+	if !r.write {
+		return result
+	}
+	if _, err := r.disableUnsafeAutoMerge(ctx, state.openPull, false); err != nil {
+		return operationalError(result, err)
+	}
+	result.AutoMergeAction = "disabled"
+	return result
 }
 
 func (r *Runner) prepareRepository(

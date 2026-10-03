@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -396,6 +397,39 @@ func TestSelectionNeverHidesPolicyOrCoverageFailures(t *testing.T) {
 		result := fixtureRunner(host, vcs, updater, true).Run(context.Background(), []string{"openhoo/tool"})[0]
 		if result.Error == "" || host.closeCalls > 0 || len(vcs.deletes) > 0 {
 			t.Fatalf("%s inventory authorized cleanup: %+v", status, result)
+		}
+	}
+}
+
+func TestIncompleteInventoryRevokesExistingAutoMergeWithoutCleanup(t *testing.T) {
+	for _, status := range []string{"unresolved", "blocked", "unsupported"} {
+		for _, write := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/write=%v", status, write), func(t *testing.T) {
+				host := fixtureHost()
+				pull := pullRequest{Number: 5, NodeID: "PR_5", Body: managedMarker, State: "open", AutoMerge: &struct {
+					MergeMethod string `json:"merge_method"`
+				}{MergeMethod: "squash"}}
+				pull.Head.SHA = strings.Repeat("c", 40)
+				pull.Base.Ref = "main"
+				host.pulls = []pullRequest{pull}
+				host.refExists = true
+				host.refSHA = pull.Head.SHA
+				vcs := &fakeVCS{baseSHA: strings.Repeat("a", 40)}
+				report := update.Report{Updates: []update.Update{{Candidate: update.Candidate{Name: "selected"}, Status: status}}}
+				updater := func(context.Context, string, bool, *githubapi.Client) (update.Report, []update.AppliedFile, error) {
+					return report, nil, nil
+				}
+				result := fixtureRunner(host, vcs, updater, write).Run(context.Background(), []string{"openhoo/tool"})[0]
+				want := "would-disable"
+				calls := 0
+				if write {
+					want = "disabled"
+					calls = 1
+				}
+				if result.Error == "" || result.AutoMergeAction != want || host.disableCalls != calls || host.closeCalls != 0 || host.updateCalls != 0 || host.createCalls != 0 || len(vcs.deletes) != 0 || len(vcs.pushes) != 0 || vcs.commitCalls != 0 {
+					t.Fatalf("incomplete lifecycle result=%+v host=%+v vcs=%+v", result, host, vcs)
+				}
+			})
 		}
 	}
 }

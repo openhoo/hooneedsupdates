@@ -87,7 +87,11 @@ Eligible PRs use GitHub's `enablePullRequestAutoMerge` mutation. GitHub still
 waits for the repository's required checks, reviews, conversation resolution,
 deployment gates, and up-to-date-branch rules. HooNeedsUpdates never substitutes
 its own green status for those controls. If a later plan stops matching the
-policy, HooNeedsUpdates disables an existing auto-merge request.
+policy, HooNeedsUpdates disables an existing auto-merge request. A successful
+scan with unresolved, blocked, or unsupported selected entries also revokes an
+existing request on the owned PR while leaving its branch and PR open. Preview
+reports `would-disable`. A failed scan or unavailable GitHub API cannot establish
+that revocation; the reported error must be resolved before trusting a new run.
 
 `draft: true` and enabled auto-merge are rejected as contradictory. Major
 updates require explicit inclusion in `updateTypes`.
