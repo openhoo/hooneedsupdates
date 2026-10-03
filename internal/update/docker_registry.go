@@ -26,13 +26,16 @@ func (r *HTTPResolver) dockerRegistryTags(ctx context.Context, name string) ([]s
 	if err := json.Unmarshal(body, &auth); err != nil {
 		return nil, errors.New("invalid Docker Hub anonymous token response")
 	}
-	if auth.Token == "" {
-		auth.Token = auth.AccessToken
+	for _, token := range []string{auth.Token, auth.AccessToken} {
+		if token == "" {
+			continue
+		}
+		if strings.ContainsAny(token, "\r\n") {
+			return nil, errors.New("Docker Hub returned an invalid anonymous pull token")
+		}
+		return r.registryTags(ctx, "https://registry-1.docker.io/v2/"+name+"/tags/list?n=1000", name, token)
 	}
-	if auth.Token == "" || strings.ContainsAny(auth.Token, "\r\n") {
-		return nil, errors.New("Docker Hub returned no usable anonymous pull token")
-	}
-	return r.registryTags(ctx, "https://registry-1.docker.io/v2/"+name+"/tags/list?n=1000", name, auth.Token)
+	return nil, errors.New("Docker Hub returned no usable anonymous pull token")
 }
 
 func (r *HTTPResolver) registryTags(ctx context.Context, endpoint, name, token string) ([]string, error) {

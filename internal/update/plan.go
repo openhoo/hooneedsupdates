@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 const maxPlanSize = 128 << 20
@@ -48,6 +47,9 @@ func contentDigest(data []byte) string {
 // RequireComplete prevents incomplete inventory from authorizing source writes.
 func RequireComplete(report Report) error {
 	for _, entry := range report.Updates {
+		if entry.Status != "current" && entry.Status != "outdated" && entry.Status != "ignored" && entry.Status != "unresolved" && entry.Status != "blocked" && entry.Status != "unsupported" {
+			return fmt.Errorf("invalid report status %q", entry.Status)
+		}
 		if entry.Status == "unresolved" || entry.Status == "blocked" || entry.Status == "unsupported" {
 			return fmt.Errorf("refusing incomplete plan: %s %s in %s: %s", entry.Status, entry.Name, entry.File, entry.Error)
 		}
@@ -138,7 +140,7 @@ func validatePlan(plan Plan) error {
 	}
 	seen := map[string]bool{}
 	for _, file := range plan.Files {
-		if !filepath.IsLocal(filepath.FromSlash(file.Path)) || filepath.ToSlash(filepath.Clean(filepath.FromSlash(file.Path))) != file.Path || seen[file.Path] || file.Mode > 0777 || len(file.After) > maxGeneratedFile || (file.Kind != "manifest" && file.Kind != "lockfile") {
+		if !filepath.IsLocal(filepath.FromSlash(file.Path)) || file.Path == ".git" || strings.HasPrefix(file.Path, ".git/") || filepath.ToSlash(filepath.Clean(filepath.FromSlash(file.Path))) != file.Path || seen[file.Path] || file.Mode > 0777 || len(file.After) > maxGeneratedFile || (file.Kind != "manifest" && file.Kind != "lockfile") {
 			return fmt.Errorf("invalid saved plan file %q", file.Path)
 		}
 		seen[file.Path] = true
@@ -150,6 +152,21 @@ func validatePlan(plan Plan) error {
 		}
 		if file.Kind == "lockfile" && !plan.Lockfiles {
 			return errors.New("manifest-only plan contains lockfile output")
+		}
+	}
+	for _, entry := range plan.Report.Updates {
+		if entry.Status != "outdated" {
+			continue
+		}
+		found := false
+		for _, file := range plan.Files {
+			if file.Path == entry.File && file.Kind == "manifest" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("saved plan has no manifest output for %s", entry.File)
 		}
 	}
 	return nil
@@ -261,94 +278,4 @@ func ApplyPlan(root string, plan Plan, write bool) ([]AppliedFile, error) {
 		}
 	}
 	return files, nil
-}
-
-// WriteDiff emits one contextual unified hunk per text file and summaries for
-// binary files. Review and saved-plan apply share the exact same output bytes.
-func WriteDiff(output io.Writer, files []AppliedFile) error {
-	for _, file := range files {
-		if bytes.Equal(file.Before, file.After) {
-			continue
-		}
-		if !utf8.Valid(file.Before) || !utf8.Valid(file.After) || bytes.IndexByte(file.Before, 0) >= 0 || bytes.IndexByte(file.After, 0) >= 0 {
-			if _, err := fmt.Fprintf(output, "Binary %s: %s -> %s\n", file.Path, contentDigest(file.Before), contentDigest(file.After)); err != nil {
-				return err
-			}
-			continue
-		}
-		old, next := diffLines(file.Before), diffLines(file.After)
-		prefix := 0
-		for prefix < len(old) && prefix < len(next) && old[prefix] == next[prefix] {
-			prefix++
-		}
-		suffix := 0
-		for suffix < len(old)-prefix && suffix < len(next)-prefix && old[len(old)-1-suffix] == next[len(next)-1-suffix] {
-			suffix++
-		}
-		start := prefix - 3
-		if start < 0 {
-			start = 0
-		}
-		context := suffix
-		if context > 3 {
-			context = 3
-		}
-		oldEnd, newEnd := len(old)-suffix+context, len(next)-suffix+context
-		oldName := "a/" + file.Path
-		if file.Created {
-			oldName = "/dev/null"
-		}
-		oldStart, newStart := start+1, start+1
-		if len(old) == 0 {
-			oldStart = 0
-		}
-		if len(next) == 0 {
-			newStart = 0
-		}
-		if _, err := fmt.Fprintf(output, "--- %s\n+++ b/%s\n@@ -%d,%d +%d,%d @@\n", oldName, file.Path, oldStart, oldEnd-start, newStart, newEnd-start); err != nil {
-			return err
-		}
-		emit := func(marker string, line string) error {
-			if _, err := io.WriteString(output, marker+line); err != nil {
-				return err
-			}
-			if !strings.HasSuffix(line, "\n") {
-				_, err := io.WriteString(output, "\n\\ No newline at end of file\n")
-				return err
-			}
-			return nil
-		}
-		for i := start; i < prefix; i++ {
-			if err := emit(" ", old[i]); err != nil {
-				return err
-			}
-		}
-		for i := prefix; i < len(old)-suffix; i++ {
-			if err := emit("-", old[i]); err != nil {
-				return err
-			}
-		}
-		for i := prefix; i < len(next)-suffix; i++ {
-			if err := emit("+", next[i]); err != nil {
-				return err
-			}
-		}
-		for i := len(next) - suffix; i < newEnd; i++ {
-			if err := emit(" ", next[i]); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func diffLines(data []byte) []string {
-	if len(data) == 0 {
-		return nil
-	}
-	lines := strings.SplitAfter(string(data), "\n")
-	if lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return lines
 }

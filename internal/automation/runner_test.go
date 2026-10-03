@@ -270,7 +270,6 @@ type fakeHost struct {
 	createCalls  int
 	updateCalls  int
 	closeCalls   int
-	deleteCalls  int
 	enableCalls  int
 	disableCalls int
 	labelCalls   int
@@ -308,10 +307,7 @@ func (h *fakeHost) UpdatePull(_ context.Context, _ string, number int, title, bo
 	return pull, nil
 }
 func (h *fakeHost) ClosePull(context.Context, string, int) error { h.closeCalls++; return nil }
-func (h *fakeHost) DeleteRef(context.Context, string, string) error {
-	h.deleteCalls++
-	return nil
-}
+
 func (h *fakeHost) AddLabels(context.Context, string, int, []string) error {
 	h.labelCalls++
 	return nil
@@ -383,4 +379,23 @@ func (v *fakeVCS) DeleteBranch(_ context.Context, _ string, branch, lease string
 	}
 	v.deletes = append(v.deletes, fakePush{branch: branch, lease: lease})
 	return nil
+}
+
+func TestSelectionNeverHidesPolicyOrCoverageFailures(t *testing.T) {
+	for _, status := range []string{"blocked", "unsupported"} {
+		report := update.Report{Updates: []update.Update{{Candidate: update.Candidate{Manager: update.ManagerDocker, Name: "selected"}, Status: status}}}
+		selected := SelectReport(report, config.Selection{UpdateTypes: []string{"patch"}, Dependencies: []string{"^selected$"}})
+		if len(selected.Updates) != 1 || update.RequireComplete(selected) == nil {
+			t.Fatalf("%s hidden by type selection: %+v", status, selected)
+		}
+		host := fixtureHost()
+		vcs := &fakeVCS{baseSHA: strings.Repeat("a", 40)}
+		updater := func(context.Context, string, bool, *githubapi.Client) (update.Report, []update.AppliedFile, error) {
+			return selected, nil, nil
+		}
+		result := fixtureRunner(host, vcs, updater, true).Run(context.Background(), []string{"openhoo/tool"})[0]
+		if result.Error == "" || host.closeCalls > 0 || len(vcs.deletes) > 0 {
+			t.Fatalf("%s inventory authorized cleanup: %+v", status, result)
+		}
+	}
 }

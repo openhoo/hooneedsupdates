@@ -109,6 +109,51 @@
           "name": {
             "type": "string"
           },
+          "policy": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "channel": {
+                  "type": "string"
+                },
+                "dependency": {
+                  "type": "string"
+                },
+                "group": {
+                  "type": "string"
+                },
+                "managers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "maxVersion": {
+                  "type": "string"
+                },
+                "minVersion": {
+                  "type": "string"
+                },
+                "minimumAge": {
+                  "type": "string"
+                },
+                "sharedVersion": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "dependency"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "publishedAt": {
             "format": "date-time",
             "type": "string"

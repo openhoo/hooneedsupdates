@@ -241,14 +241,14 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 2
 	}
+	if *lockfiles && *planPath == "" {
+		fmt.Fprintln(stderr, "scan --lockfiles requires --plan")
+		return 2
+	}
 	report, cfg, err := scan(ctx, root, *configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
-	}
-	if *lockfiles && *planPath == "" {
-		fmt.Fprintln(stderr, "scan --lockfiles requires --plan")
-		return 2
 	}
 	if *planPath != "" {
 		var files []update.AppliedFile

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -196,14 +197,18 @@ func FilterReport(report Report, keep func(Update) bool) Report {
 	filtered := report
 	filtered.Updates = make([]Update, 0, len(report.Updates))
 	filtered.Summary = Summary{}
-	excludedGroups := map[string]bool{}
+	groupSelection := map[string]uint8{}
 	for _, entry := range report.Updates {
-		if entry.Group != "" && !keep(entry) {
-			excludedGroups[entry.Group] = true
+		if entry.Group != "" {
+			if keep(entry) {
+				groupSelection[entry.Group] |= 1
+			} else {
+				groupSelection[entry.Group] |= 2
+			}
 		}
 	}
 	for _, entry := range report.Updates {
-		if excludedGroups[entry.Group] && entry.Group != "" {
+		if groupSelection[entry.Group] == 3 {
 			entry.Status = "blocked"
 			entry.Error = "selection would split update group"
 		} else if !keep(entry) {
@@ -246,6 +251,8 @@ func planDigest(updates []Update) string {
 		} {
 			writeDigestField(digest, field)
 		}
+		policy, _ := json.Marshal(entry.Policy)
+		writeDigestField(digest, string(policy))
 	}
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }

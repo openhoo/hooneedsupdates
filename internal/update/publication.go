@@ -3,10 +3,12 @@ package update
 import (
 	"context"
 	"encoding/json"
-	"golang.org/x/mod/module"
+	"errors"
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/module"
 )
 
 // Publication metadata is requested only when policy requires it. NuGet has no
@@ -42,6 +44,8 @@ func (r *HTTPResolver) Resolve(ctx context.Context, entry Candidate, prereleases
 		return Resolution{}, err
 	}
 	var response struct {
+		Version   string          `json:"Version"`
+		Tag       string          `json:"tag_name"`
 		Time      json.RawMessage `json:"time"`
 		Published time.Time       `json:"published_at"`
 		Versions  []struct {
@@ -51,6 +55,9 @@ func (r *HTTPResolver) Resolve(ctx context.Context, entry Candidate, prereleases
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return Resolution{}, err
+	}
+	if (entry.Datasource == "go" && response.Version != result.Version) || (entry.Datasource == "github-releases" && response.Tag != result.Version) {
+		return Resolution{}, errors.New("publication metadata does not match the selected target")
 	}
 	published := response.Published
 	switch entry.Datasource {

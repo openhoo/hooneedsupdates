@@ -1,6 +1,9 @@
 package update
 
-import "time"
+import (
+	"github.com/openhoo/hooneedsupdates/internal/config"
+	"time"
+)
 
 type Manager string
 
@@ -41,6 +44,7 @@ type Candidate struct {
 }
 
 type Update struct {
+	Policy []config.PackageRule `json:"policy,omitempty"`
 	Candidate
 	LatestVersion string     `json:"latestVersion,omitempty"`
 	LatestDigest  string     `json:"latestDigest,omitempty"`

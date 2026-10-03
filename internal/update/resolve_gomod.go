@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
-	"strings"
 )
 
 func (r *HTTPResolver) resolveGo(ctx context.Context, name string, includePrereleases bool) (Resolution, error) {

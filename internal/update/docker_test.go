@@ -3,11 +3,12 @@ package update
 import (
 	"context"
 	"fmt"
-	"github.com/openhoo/hooneedsupdates/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/openhoo/hooneedsupdates/internal/config"
 )
 
 func TestDockerDigestPinAndUnsupportedInventory(t *testing.T) {

@@ -181,3 +181,27 @@ func TestLoadRejectsNonRegularAndOversizedConfiguration(t *testing.T) {
 		t.Fatalf("oversized config accepted: %v", err)
 	}
 }
+
+func TestPackageRuleValidation(t *testing.T) {
+	for _, rule := range []PackageRule{
+		{Dependency: "["}, {Dependency: "a", Managers: []string{"unknown"}},
+		{Dependency: "a", SharedVersion: true}, {Dependency: "a", Group: "bad/group"},
+		{Dependency: "a", Channel: "latest"}, {Dependency: "a", MinimumAge: "-1h"},
+		{Dependency: "a", MinimumAge: "8761h"}, {Dependency: "a", MinVersion: "banana"},
+		{Dependency: "a", MinVersion: "2.0.0", MaxVersion: "1.0.0"},
+	} {
+		cfg := Default()
+		cfg.PackageRules = []PackageRule{rule}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid rule accepted: %+v", rule)
+		}
+	}
+	cfg := Default()
+	cfg.PackageRules = []PackageRule{{Dependency: "^family/", Managers: []string{"npm"}, Group: "family", SharedVersion: true, MinimumAge: "48h", Channel: "stable", MinVersion: "1.0.0", MaxVersion: "2.0.0"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.MatchingRules("npm", "family/a")) != 1 || len(cfg.MatchingRules("cargo", "family/a")) != 0 {
+		t.Fatal("rule manager matching incorrect")
+	}
+}

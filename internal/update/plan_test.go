@@ -147,3 +147,29 @@ func TestReviewDiffAppliesExactBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestReviewDiffSeparatesDistantChangesAndQuotesPaths(t *testing.T) {
+	root := t.TempDir()
+	name := "input space file.txt"
+	before := []byte("old first\n" + strings.Repeat("unchanged\n", 20) + "old last\n")
+	after := []byte("new first\n" + strings.Repeat("unchanged\n", 20) + "new last\n")
+	path := filepath.Join(root, name)
+	os.WriteFile(path, before, 0644)
+	var diff bytes.Buffer
+	if err := WriteDiff(&diff, []AppliedFile{{Path: name, Before: before, After: after}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(diff.String(), "@@ -") != 2 || strings.Contains(diff.String(), "-unchanged") {
+		t.Fatalf("noisy review diff: %s", &diff)
+	}
+	command := exec.Command("git", "-c", "core.autocrlf=false", "apply", "--unsafe-paths", "-")
+	command.Dir = root
+	command.Stdin = &diff
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("quoted path diff rejected: %v %s", err, output)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, after) {
+		t.Fatalf("different output: %v", err)
+	}
+}

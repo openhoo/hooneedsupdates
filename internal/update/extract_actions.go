@@ -3,11 +3,12 @@ package update
 import (
 	"bytes"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"io"
 	"regexp"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 var actionVersion = regexp.MustCompile(`(?m)^\s+version:\s*["']?([^\s"']+)["']?\s*$`)

@@ -1,8 +1,9 @@
 package update
 
 import (
-	"golang.org/x/mod/modfile"
 	"regexp"
+
+	"golang.org/x/mod/modfile"
 )
 
 var goRequireLine = regexp.MustCompile(`(?m)^\s*(?:require\s+)?([^\s]+)\s+(v[^\s]+)(?:\s+//\s*indirect)?\s*$`)

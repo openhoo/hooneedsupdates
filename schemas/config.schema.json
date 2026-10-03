@@ -276,16 +276,18 @@
         "properties": {
           "channel": {
             "enum": [
+              "",
               "stable",
               "prerelease"
             ],
             "type": "string"
           },
           "dependency": {
+            "minLength": 1,
             "type": "string"
           },
           "group": {
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$",
+            "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$",
             "type": "string"
           },
           "managers": {

@@ -2,11 +2,12 @@ package update
 
 import (
 	"context"
-	"github.com/openhoo/hooneedsupdates/internal/config"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/openhoo/hooneedsupdates/internal/config"
 )
 
 func TestPackagePolicyAgeWindowAndGroupClosure(t *testing.T) {
@@ -34,6 +35,10 @@ func TestPackagePolicyAgeWindowAndGroupClosure(t *testing.T) {
 	filtered := FilterReport(Report{Updates: updates}, func(entry Update) bool { return entry.Name == "family/a" })
 	if filtered.Summary.Blocked != 2 || len(filtered.Updates) != 2 || RequireComplete(filtered) == nil {
 		t.Fatalf("partial selection allowed %+v", filtered)
+	}
+	excluded := FilterReport(Report{Updates: updates}, func(Update) bool { return false })
+	if len(excluded.Updates) != 0 || excluded.Summary.Blocked != 0 {
+		t.Fatalf("fully unselected group blocked selection: %+v", excluded)
 	}
 }
 func TestPolicyChannelConflictAndStableOverride(t *testing.T) {
@@ -65,7 +70,7 @@ func TestScannerAppliesPolicyWithRequiredMetadata(t *testing.T) {
 	cfg := config.Default()
 	cfg.PackageRules = []config.PackageRule{{Dependency: "^a$", MinimumAge: "48h", Group: "family"}}
 	report, err := (Scanner{Config: cfg, Resolver: publicationResolver{now: now.Add(-time.Hour)}, Now: func() time.Time { return now }}).Scan(context.Background(), root)
-	if err != nil || report.Summary.Blocked != 1 || report.Updates[0].Group != "family" {
+	if err != nil || report.Summary.Blocked != 1 || report.Updates[0].Group != "family" || len(report.Updates[0].Policy) != 1 || report.Updates[0].Policy[0].MinimumAge != "48h" {
 		t.Fatalf("policy report %+v %v", report, err)
 	}
 }

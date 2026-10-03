@@ -2,22 +2,23 @@ package config
 
 import (
 	"fmt"
-	"golang.org/x/mod/semver"
 	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 // PackageRules are applied cumulatively; conflicting channels or groups block.
 type PackageRule struct {
-	Dependency    string   `yaml:"dependency"`
-	Managers      []string `yaml:"managers,omitempty"`
-	Group         string   `yaml:"group,omitempty"`
-	SharedVersion bool     `yaml:"sharedVersion,omitempty"`
-	MinimumAge    string   `yaml:"minimumAge,omitempty"`
-	Channel       string   `yaml:"channel,omitempty"`
-	MinVersion    string   `yaml:"minVersion,omitempty"`
-	MaxVersion    string   `yaml:"maxVersion,omitempty"`
+	Dependency    string   `yaml:"dependency" json:"dependency"`
+	Managers      []string `yaml:"managers,omitempty" json:"managers,omitempty"`
+	Group         string   `yaml:"group,omitempty" json:"group,omitempty"`
+	SharedVersion bool     `yaml:"sharedVersion,omitempty" json:"sharedVersion,omitempty"`
+	MinimumAge    string   `yaml:"minimumAge,omitempty" json:"minimumAge,omitempty"`
+	Channel       string   `yaml:"channel,omitempty" json:"channel,omitempty"`
+	MinVersion    string   `yaml:"minVersion,omitempty" json:"minVersion,omitempty"`
+	MaxVersion    string   `yaml:"maxVersion,omitempty" json:"maxVersion,omitempty"`
 }
 
 func policyVersion(value string) string {

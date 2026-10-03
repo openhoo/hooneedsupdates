@@ -3,7 +3,6 @@ package update
 import (
 	"context"
 	"fmt"
-	"github.com/openhoo/hooneedsupdates/internal/config"
 	"io"
 	"io/fs"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/openhoo/hooneedsupdates/internal/config"
 )
 
 const maxManifestSize = 5 << 20

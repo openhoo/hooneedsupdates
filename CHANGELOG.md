@@ -52,6 +52,17 @@
 
 ### Features
 
+- Save exact reviewed manifest and lockfile output for offline apply, with strict
+  schema/checksum/source validation and unified diffs.
+- Resolve and atomically update Docker tag/digest pins; report unsupported
+  container references and complete anonymous catalogs through OCI fallback.
+- Add cumulative package rules for atomic groups, shared versions, release age,
+  channels, and compatibility windows. Block incomplete selected inventory.
+- Lease stale branch deletions and paginate PR ownership history within bounds.
+- Qualify native Windows transactions, Go 1.25, and real Go/Cargo/npm/Bun/NuGet
+  lockfile regeneration; isolate Git warnings from machine-readable output.
+- Split extraction, resolution, and lockfile grouping by ecosystem; publish
+  generated configuration/report/plan schemas and recovery/migration guides.
 - Add read-only-by-default multi-repository update reconciliation with exact-SHA
   branch leases, managed pull requests, stale-plan closure, and deterministic
   commits.

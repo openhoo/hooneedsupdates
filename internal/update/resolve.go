@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/openhoo/hooneedsupdates/internal/githubapi"
-	"golang.org/x/mod/semver"
 	"io"
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/openhoo/hooneedsupdates/internal/githubapi"
+	"golang.org/x/mod/semver"
 )
 
 type Resolver interface {

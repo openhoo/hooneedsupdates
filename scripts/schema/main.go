@@ -57,8 +57,9 @@ func documents() map[string]schema {
 	rules := cfg["packageRules"]["items"].(schema)
 	rules["required"] = []string{"dependency"}
 	ruleProperties := rules["properties"].(map[string]schema)
-	ruleProperties["channel"]["enum"] = []string{"stable", "prerelease"}
-	ruleProperties["group"]["pattern"] = `^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$`
+	ruleProperties["dependency"]["minLength"] = 1
+	ruleProperties["channel"]["enum"] = []string{"", "stable", "prerelease"}
+	ruleProperties["group"]["pattern"] = `^$|^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$`
 	ruleProperties["minimumAge"]["description"] = "Go duration between 0s and 8760h. Missing publication metadata blocks the update."
 	report := documents["report"]["properties"].(map[string]schema)
 	report["schemaVersion"]["const"] = 2

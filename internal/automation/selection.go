@@ -21,9 +21,9 @@ func SelectReport(report update.Report, selection config.Selection) update.Repor
 		if len(patterns) > 0 && !matchesAny(patterns, entry.Name) {
 			return false
 		}
-		// Resolution failures have no trustworthy update type yet. Keep matching
-		// entries so a type filter can never hide an unresolved selected input.
-		if entry.Status != "unresolved" && len(allowedTypes) > 0 && !allowedTypes[entry.UpdateType] {
+		// Only actionable targets have a meaningful update-type selection. Keep
+		// current and incomplete members so selection cannot hide policy blocks.
+		if entry.Status == "outdated" && len(allowedTypes) > 0 && !allowedTypes[entry.UpdateType] {
 			return false
 		}
 		return true

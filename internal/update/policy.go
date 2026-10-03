@@ -2,9 +2,10 @@ package update
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/openhoo/hooneedsupdates/internal/config"
 	"golang.org/x/mod/semver"
-	"time"
 )
 
 func policyChannel(cfg config.Config, candidate Candidate) (bool, bool, string) {
@@ -33,6 +34,7 @@ func policyChannel(cfg config.Config, candidate Candidate) (bool, bool, string) 
 }
 func applyPackagePolicy(cfg config.Config, entry Update, now time.Time) Update {
 	rules := cfg.MatchingRules(string(entry.Manager), entry.Name)
+	entry.Policy = append([]config.PackageRule(nil), rules...)
 	for _, rule := range rules {
 		if rule.Group != "" {
 			entry.Group = rule.Group
