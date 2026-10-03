@@ -350,6 +350,9 @@ func runApply(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if *diff {
+		return 0
+	}
 	if len(files) == 0 {
 		fmt.Fprintln(stdout, "No applicable updates.")
 		return 0

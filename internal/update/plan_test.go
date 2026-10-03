@@ -134,7 +134,7 @@ func TestReviewDiffAppliesExactBytes(t *testing.T) {
 			if err := WriteDiff(&diff, []AppliedFile{{Path: "input.txt", Before: []byte(test.before), After: []byte(test.after), Created: test.created}}); err != nil {
 				t.Fatal(err)
 			}
-			command := exec.Command("git", "apply", "--unsafe-paths", "-")
+			command := exec.Command("git", "-c", "core.autocrlf=false", "apply", "--unsafe-paths", "-")
 			command.Dir = root
 			command.Stdin = &diff
 			if output, err := command.CombinedOutput(); err != nil {

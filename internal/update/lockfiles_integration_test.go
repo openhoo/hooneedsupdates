@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,7 +106,7 @@ func TestExecutableAdditionalManagers(t *testing.T) {
 	t.Run("bun-no-scripts", func(t *testing.T) {
 		requireExecutable(t, "bun")
 		marker := filepath.Join(t.TempDir(), "script-executed")
-		script := "node -e \"require('fs').writeFileSync(" + strconv.Quote(marker) + ",'bad')\""
+		script := `node -e "require('fs').writeFileSync('` + filepath.ToSlash(marker) + `','bad')"`
 		// A trusted dependency must still never execute its lifecycle script.
 		packageJSON := map[string]any{"name": "lockfile-fixture", "private": true, "packageManager": "bun@1.3.14", "dependencies": map[string]string{"lodash": "4.17.20"}, "scripts": map[string]string{"postinstall": script}, "trustedDependencies": []string{"lodash"}}
 		encoded, _ := json.Marshal(packageJSON)

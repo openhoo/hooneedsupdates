@@ -113,6 +113,10 @@ func (r *HTTPResolver) resolveDocker(ctx context.Context, name, current string, 
 	}
 	endpoint := r.endpoint(r.DockerHub, "repositories/"+name+"/tags?page_size=100")
 	tags, err := r.dockerTags(ctx, endpoint)
+	var status *datasourceHTTPError
+	if errors.As(err, &status) && status.status == 403 && strings.Contains(status.message, "pagination offset too large") && r.DockerHub == "https://hub.docker.com/v2" {
+		tags, err = r.dockerRegistryTags(ctx, name)
+	}
 	if err != nil {
 		return Resolution{}, err
 	}

@@ -162,7 +162,7 @@ func TestWritePlansRejectsTargetMetadataChangedAfterPlanning(t *testing.T) {
 		{
 			name: "permissions",
 			mutate: func(t *testing.T, root string) {
-				if err := os.Chmod(filepath.Join(root, "sub", "package.json"), 0o600); err != nil {
+				if err := os.Chmod(filepath.Join(root, "sub", "package.json"), 0o444); err != nil {
 					t.Fatal(err)
 				}
 			},

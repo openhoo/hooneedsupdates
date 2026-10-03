@@ -279,3 +279,39 @@ func TestScanRejectsInsecureGitHubEndpointBeforeSendingToken(t *testing.T) {
 		t.Fatalf("token sent to insecure endpoint %d times", calls)
 	}
 }
+
+func TestApplySavedPlanIgnoresConfigAndNeverScans(t *testing.T) {
+	root := t.TempDir()
+	source := []byte("v1.0.0\n")
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), source, 0644); err != nil {
+		t.Fatal(err)
+	}
+	report := update.Report{SchemaVersion: 2, Root: filepath.ToSlash(root), Summary: update.Summary{Detected: 1, Outdated: 1}, Updates: []update.Update{{Candidate: update.Candidate{Manager: update.ManagerGoMod, Name: "example.test/x", CurrentVersion: "v1.0.0", CurrentValue: "v1.0.0", Start: 0, End: 6, File: "go.mod"}, LatestVersion: "v1.1.0", Status: "outdated"}}}
+	files, err := update.Apply(root, report, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := update.CreatePlan(root, report, files, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := update.SavePlan(path, plan); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, config.FileName), []byte("not: valid: yaml"), 0644)
+	t.Setenv("GITHUB_API_URL", "http://invalid.test")
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"apply", "--plan", path, "--diff", root}, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "+v1.1.0") || strings.Contains(stdout.String(), "Preview") {
+		t.Fatalf("offline preview code %d: %s %s", code, &stdout, &stderr)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), []string{"apply", "--plan", path, "--write", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("offline apply code %d: %s", code, &stderr)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil || string(data) != "v1.1.0\n" {
+		t.Fatalf("saved output changed: %q %v", data, err)
+	}
+}

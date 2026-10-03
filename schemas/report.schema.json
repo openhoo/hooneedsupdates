@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Generated from Go wire models. Runtime also validates paths, policy conflicts, version windows, source hashes, and checksums.",
+  "properties": {
+    "generatedAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "planDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "root": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 2,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "summary": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "current": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "detected": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ignored": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outdated": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unresolved": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unsupported": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "current",
+        "detected",
+        "ignored",
+        "outdated",
+        "unresolved"
+      ],
+      "type": "object"
+    },
+    "updates": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "currentDigest": {
+            "description": "Docker uses sha256:\u003c64 hex\u003e; GitHub Actions latestDigest uses a 40 character commit SHA.",
+            "type": "string"
+          },
+          "currentVersion": {
+            "type": "string"
+          },
+          "datasource": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "latestDigest": {
+            "description": "Docker uses sha256:\u003c64 hex\u003e; GitHub Actions latestDigest uses a 40 character commit SHA.",
+            "type": "string"
+          },
+          "latestVersion": {
+            "type": "string"
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "manager": {
+            "enum": [
+              "gomod",
+              "cargo",
+              "npm",
+              "nuget",
+              "github-actions",
+              "docker",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "publishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "current",
+              "outdated",
+              "unresolved",
+              "ignored",
+              "blocked",
+              "unsupported"
+            ],
+            "type": "string"
+          },
+          "unsupportedReason": {
+            "type": "string"
+          },
+          "updateType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "currentVersion",
+          "datasource",
+          "file",
+          "line",
+          "manager",
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "generatedAt",
+    "planDigest",
+    "root",
+    "schemaVersion",
+    "summary",
+    "updates"
+  ],
+  "title": "HooNeedsUpdates report",
+  "type": "object"
+}

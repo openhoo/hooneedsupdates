@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Generated from Go wire models. Runtime also validates paths, policy conflicts, version windows, source hashes, and checksums.",
+  "properties": {
+    "allowedUpdateTypes": {
+      "items": {
+        "enum": [
+          "patch",
+          "minor",
+          "major"
+        ],
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "automation": {
+      "additionalProperties": false,
+      "properties": {
+        "autoMerge": {
+          "additionalProperties": false,
+          "properties": {
+            "dependencies": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "managers": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "maxUpdates": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "requireLockfiles": {
+              "type": "boolean"
+            },
+            "updateTypes": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "branchPrefix": {
+          "type": "string"
+        },
+        "closeStale": {
+          "type": "boolean"
+        },
+        "commitAuthor": {
+          "type": "string"
+        },
+        "commitEmail": {
+          "type": "string"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "labels": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "lockfiles": {
+          "type": "boolean"
+        },
+        "mergeMethod": {
+          "type": "string"
+        },
+        "rateLimit": {
+          "additionalProperties": false,
+          "properties": {
+            "maxRetries": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxWait": {
+              "type": "string"
+            },
+            "stateFile": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "repositories": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "selection": {
+          "additionalProperties": false,
+          "properties": {
+            "dependencies": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "managers": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "updateTypes": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "concurrency": {
+      "maximum": 32,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "customManagers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "datasource": {
+            "type": "string"
+          },
+          "dependencyName": {
+            "type": "string"
+          },
+          "filePatterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "matchStrings": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "datasource",
+          "dependencyName",
+          "filePatterns",
+          "matchStrings",
+          "name"
+        ],
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "excludePaths": {
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "ignore": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "dependency": {
+            "type": "string"
+          },
+          "managers": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dependency",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "includePrereleases": {
+      "type": "boolean"
+    },
+    "lockfileTimeout": {
+      "type": "string"
+    },
+    "managers": {
+      "items": {
+        "enum": [
+          "gomod",
+          "cargo",
+          "npm",
+          "nuget",
+          "github-actions",
+          "docker"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": [
+        "array",
+        "null"
+      ],
+      "uniqueItems": true
+    },
+    "packageRules": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "enum": [
+              "stable",
+              "prerelease"
+            ],
+            "type": "string"
+          },
+          "dependency": {
+            "type": "string"
+          },
+          "group": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$",
+            "type": "string"
+          },
+          "managers": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "maxVersion": {
+            "type": "string"
+          },
+          "minVersion": {
+            "type": "string"
+          },
+          "minimumAge": {
+            "description": "Go duration between 0s and 8760h. Missing publication metadata blocks the update.",
+            "type": "string"
+          },
+          "sharedVersion": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "dependency"
+        ],
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "requestTimeout": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "title": "HooNeedsUpdates config",
+  "type": "object"
+}

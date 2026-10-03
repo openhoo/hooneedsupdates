@@ -60,3 +60,53 @@ func TestDockerPinnedResolverRequiresTagDigest(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistryCatalogPaginationConfinement(t *testing.T) {
+	for _, kind := range []string{"complete", "different-name", "cycle", "different-host", "different-path", "malformed-link", "redirect"} {
+		t.Run(kind, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Header.Get("Authorization") != "Bearer scoped-test-token" {
+					t.Fatal("missing scoped registry authorization")
+				}
+				if calls == 1 {
+					switch kind {
+					case "complete":
+						w.Header().Set("Link", `</v2/library/alpine/tags/list?n=1&last=3.24.0>; rel="next"`)
+					case "cycle":
+						w.Header().Set("Link", `</v2/library/alpine/tags/list?n=1>; rel="next"`)
+					case "different-host":
+						w.Header().Set("Link", `<https://other.test/v2/library/alpine/tags/list>; rel="next"`)
+					case "different-path":
+						w.Header().Set("Link", `</v2/library/golang/tags/list>; rel="next"`)
+					case "malformed-link":
+						w.Header().Set("Link", `not-a-link; rel="next"`)
+					case "redirect":
+						http.Redirect(w, r, "https://other.test/", http.StatusFound)
+						return
+					}
+				}
+				name := "library/alpine"
+				if kind == "different-name" {
+					name = "library/golang"
+				}
+				tag := "3.24.0"
+				if calls == 2 {
+					tag = "3.24.1"
+				}
+				fmt.Fprintf(w, `{"name":%q,"tags":[%q]}`, name, tag)
+			}))
+			defer server.Close()
+			resolver := NewHTTPResolver(server.Client(), "")
+			tags, err := resolver.registryTags(context.Background(), server.URL+"/v2/library/alpine/tags/list?n=1", "library/alpine", "scoped-test-token")
+			if kind == "complete" {
+				if err != nil || len(tags) != 2 || tags[1] != "3.24.1" {
+					t.Fatalf("incomplete catalog %v %v", tags, err)
+				}
+			} else if err == nil || tags != nil {
+				t.Fatalf("unsafe catalog accepted %v %v", tags, err)
+			}
+		})
+	}
+}

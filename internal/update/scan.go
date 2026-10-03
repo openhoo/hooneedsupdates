@@ -138,8 +138,9 @@ dispatch:
 	if s.Now != nil {
 		now = s.Now
 	}
+	nowTime := now().UTC()
 	for i, entry := range updates {
-		updates[i] = applyPackagePolicy(s.Config, entry, now().UTC())
+		updates[i] = applyPackagePolicy(s.Config, entry, nowTime)
 	}
 	enforceGroups(s.Config, updates)
 	sort.SliceStable(updates, func(i, j int) bool {
@@ -154,7 +155,7 @@ dispatch:
 
 	report := Report{
 		SchemaVersion: 2,
-		GeneratedAt:   now().UTC(),
+		GeneratedAt:   nowTime,
 		Root:          filepath.ToSlash(absRoot),
 		PlanDigest:    planDigest(updates),
 		Updates:       updates,

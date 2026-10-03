@@ -528,10 +528,11 @@ func runGit(ctx context.Context, directory, hooksDirectory string, arguments ...
 	}
 	output := &limitedBuffer{remaining: maxCommandOutput}
 	process.Stdout = output
-	process.Stderr = output
+	stderr := &limitedBuffer{remaining: maxCommandOutput}
+	process.Stderr = stderr
 	err = process.Run()
 	if err != nil {
-		message := strings.TrimSpace(output.String())
+		message := strings.TrimSpace(stderr.String() + "\n" + output.String())
 		if message != "" {
 			return output.Bytes(), fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, message)
 		}
@@ -567,6 +568,21 @@ func regenerateOnce(
 	defer func() {
 		_, _ = runGit(context.Background(), sourceRoot, hooks, "worktree", "remove", "--force", worktree)
 	}()
+	// Git checkout conversion (notably Windows autocrlf) must not change the
+	// byte ranges approved from the source checkout. Restore its verified bytes.
+	for _, relative := range sortedSnapshotPaths(plan.source) {
+		snapshot := plan.source[relative]
+		if !snapshot.existed {
+			continue
+		}
+		target, err := containedPath(worktree, relative)
+		if err != nil {
+			return nil, err
+		}
+		if err := atomicWrite(target, snapshot.data, snapshot.mode); err != nil {
+			return nil, err
+		}
+	}
 	worktreeReport := report
 	worktreeReport.Root = filepath.ToSlash(worktree)
 	if _, err := Apply(worktree, worktreeReport, true); err != nil {

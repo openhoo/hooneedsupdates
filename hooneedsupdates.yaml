@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=schemas/config.schema.json
 version: 1
 managers:
   - gomod
@@ -16,6 +17,47 @@ concurrency: 8
 requestTimeout: 15s
 lockfileTimeout: 5m
 includePrereleases: false
+packageRules:
+  - dependency: '^openhoo/hooneedsupdates$'
+    managers: [github-actions, custom]
+    group: hooneedsupdates
+    sharedVersion: true
+    channel: stable
+  - dependency: '^openhoo/hooversion$'
+    managers: [github-actions, custom]
+    group: hooversion
+    sharedVersion: true
+    channel: stable
+  - dependency: '^openhoo/hoolicy$'
+    managers: [github-actions, custom]
+    group: hoolicy
+    sharedVersion: true
+    channel: stable
+  - dependency: '^openhoo/hooray$'
+    managers: [github-actions, custom]
+    group: hooray
+    sharedVersion: true
+    channel: stable
+  - dependency: '^openhoo/hoonarqube$'
+    managers: [github-actions, custom]
+    group: hoonarqube
+    sharedVersion: true
+    channel: stable
+  - dependency: '^openhoo/hoocloak$'
+    managers: [github-actions, custom]
+    group: hoocloak
+    sharedVersion: true
+    channel: stable
+  - dependency: '^openhoo/hoomail$'
+    managers: [github-actions, custom]
+    group: hoomail
+    sharedVersion: true
+    channel: stable
+  - dependency: '^openhoo/hoosharper$'
+    managers: [github-actions, custom]
+    group: hoosharper
+    sharedVersion: true
+    channel: stable
 automation:
   repositories:
     - openhoo/hooneedsupdates
