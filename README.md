@@ -57,7 +57,7 @@ compatibility.
 Download a release archive and verify it against `SHA256SUMS`, or install with Go:
 
 ```sh
-go install github.com/openhoo/hooneedsupdates/cmd/hooneedsupdates@v0.3.1
+go install github.com/openhoo/hooneedsupdates/cmd/hooneedsupdates@v0.4.0
 ```
 
 Successful non-release CI on `main` now runs Hooversion automatically. Hooversion
@@ -81,7 +81,7 @@ Container:
 docker run --rm --user "$(id -u):$(id -g)" \
   -e GITHUB_TOKEN \
   -v "$PWD:/work:ro" -w /work \
-  ghcr.io/openhoo/hooneedsupdates:v0.3.1 scan .
+  ghcr.io/openhoo/hooneedsupdates:v0.4.0 scan .
 ```
 
 `GITHUB_TOKEN` or `GH_TOKEN` is optional for public repositories, but avoids the
@@ -185,9 +185,9 @@ in [schemas/](schemas/); version-1 YAML configuration remains compatible.
 Pin the setup action to the commit behind the desired HooNeedsUpdates release:
 
 ```yaml
-- uses: openhoo/hooneedsupdates/actions/setup@ffd31b013dafcd772bb067a0eec76f739ecd76a3 # v0.3.1
+- uses: openhoo/hooneedsupdates/actions/setup@ffd31b013dafcd772bb067a0eec76f739ecd76a3 # v0.4.0
   with:
-    version: 0.3.1
+    version: 0.4.0
 - run: hooneedsupdates scan --fail-on unresolved .
   env:
     GITHUB_TOKEN: ${{ github.token }}
