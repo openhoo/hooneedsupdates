@@ -94,7 +94,7 @@ func TestRunnerFailsClosedForUnresolvedOrUnownedBranch(t *testing.T) {
 			return update.Report{Summary: update.Summary{Outdated: 1, Unresolved: 1}}, nil, nil
 		}
 		result := fixtureRunner(host, vcs, updater, true).Run(context.Background(), []string{"openhoo/tool"})[0]
-		if !strings.Contains(result.Error, "partial plan") || vcs.commitCalls != 0 || host.createCalls != 0 {
+		if !strings.Contains(result.Error, "incomplete plan") || vcs.commitCalls != 0 || host.createCalls != 0 {
 			t.Fatalf("did not fail closed: result=%+v vcs=%+v host=%+v", result, vcs, host)
 		}
 	})
@@ -139,7 +139,7 @@ func TestRunnerClosesStaleManagedPRAndBranch(t *testing.T) {
 	}
 
 	result := fixtureRunner(host, vcs, updater, true).Run(context.Background(), []string{"openhoo/tool"})[0]
-	if result.Error != "" || result.Action != "closed" || host.closeCalls != 1 || host.deleteCalls != 1 {
+	if result.Error != "" || result.Action != "closed" || host.closeCalls != 1 || len(vcs.deletes) != 1 || vcs.deletes[0].lease != open.Head.SHA {
 		t.Fatalf("stale lifecycle failed: result=%+v host=%+v", result, host)
 	}
 }
@@ -324,6 +324,7 @@ func (h *fakeHost) EnableAutoMerge(_ context.Context, _ string, method string) e
 func (h *fakeHost) DisableAutoMerge(context.Context, string) error { h.disableCalls++; return nil }
 
 type fakeVCS struct {
+	deletes []fakePush
 	baseSHA string
 	headSHA string
 
@@ -372,4 +373,14 @@ func TestRunnerNeverEnablesAutoMergeForExistingDraft(t *testing.T) {
 	if result.Error != "" || result.AutoMergeEligible || host.enableCalls != 0 || !strings.Contains(result.AutoMergeReason, "draft") {
 		t.Fatalf("result=%+v enables=%d", result, host.enableCalls)
 	}
+}
+
+func (v *fakeVCS) DeleteBranch(_ context.Context, _ string, branch, lease string) error {
+	if v.beforePush != nil {
+		if err := v.beforePush(); err != nil {
+			return err
+		}
+	}
+	v.deletes = append(v.deletes, fakePush{branch: branch, lease: lease})
+	return nil
 }

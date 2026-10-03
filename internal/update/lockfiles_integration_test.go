@@ -2,8 +2,11 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +69,7 @@ func (runner integrationRunner) Run(ctx context.Context, command lockCommand) ([
 func requireExecutable(t *testing.T, name string) {
 	t.Helper()
 	if _, err := exec.LookPath(name); err != nil {
-		t.Skipf("%s is unavailable", name)
+		t.Fatalf("required integration executable %s is unavailable", name)
 	}
 }
 
@@ -77,4 +80,66 @@ func runExternal(t *testing.T, directory, name string, arguments ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(arguments, " "), err, output)
 	}
+}
+
+func TestExecutableAdditionalManagers(t *testing.T) {
+	if os.Getenv("HOONEEDSUPDATE_INTEGRATION") != "1" {
+		t.Skip("set HOONEEDSUPDATE_INTEGRATION=1")
+	}
+	t.Run("go-workspace", func(t *testing.T) {
+		requireExecutable(t, "go")
+		root := gitFixture(t, map[string]string{
+			"go.work":        "go 1.25.0\n\nuse ./module\n",
+			"module/go.mod":  "module example.test/fixture\n\ngo 1.25.0\n\nrequire golang.org/x/text v0.27.0\n",
+			"module/main.go": "package fixture\nimport \"golang.org/x/text/cases\"\nvar _ = cases.Fold\n",
+		})
+		runExternal(t, filepath.Join(root, "module"), "go", "mod", "tidy")
+		gitRun(t, root, "add", "module/go.sum")
+		gitRun(t, root, "commit", "-m", "add go sums")
+		report := fixtureReport(t, root, "module/go.mod", ManagerGoMod, "golang.org/x/text", "v0.27.0", "v0.28.0")
+		files, err := applyWithLockfiles(context.Background(), root, report, true, 2*time.Minute, integrationRunner{t: t})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAppliedPaths(t, files, "module/go.mod", "module/go.sum")
+		runExternal(t, filepath.Join(root, "module"), "go", "test", "-mod=readonly", "./...")
+	})
+	t.Run("bun-no-scripts", func(t *testing.T) {
+		requireExecutable(t, "bun")
+		marker := filepath.Join(t.TempDir(), "script-executed")
+		script := "node -e \"require('fs').writeFileSync(" + strconv.Quote(marker) + ",'bad')\""
+		// A trusted dependency must still never execute its lifecycle script.
+		packageJSON := map[string]any{"name": "lockfile-fixture", "private": true, "packageManager": "bun@1.3.14", "dependencies": map[string]string{"lodash": "4.17.20"}, "scripts": map[string]string{"postinstall": script}, "trustedDependencies": []string{"lodash"}}
+		encoded, _ := json.Marshal(packageJSON)
+		root := gitFixture(t, map[string]string{"package.json": string(encoded) + "\n"})
+		runExternal(t, root, "bun", "install", "--lockfile-only", "--ignore-scripts")
+		gitRun(t, root, "add", "bun.lock")
+		gitRun(t, root, "commit", "-m", "add bun lock")
+		report := fixtureReport(t, root, "package.json", ManagerNPM, "lodash", "4.17.20", "4.17.21")
+		files, err := applyWithLockfiles(context.Background(), root, report, true, 2*time.Minute, integrationRunner{t: t})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAppliedPaths(t, files, "bun.lock", "package.json")
+		assertFile(t, root, "bun.lock", "4.17.21")
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatal("Bun executed a repository lifecycle script")
+		}
+	})
+	t.Run("nuget-static-project", func(t *testing.T) {
+		requireExecutable(t, "dotnet")
+		marker := filepath.Join(t.TempDir(), "target-executed")
+		project := `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Newtonsoft.Json" Version="13.0.1" /></ItemGroup><Target Name="Trap" BeforeTargets="Restore"><WriteLinesToFile File="` + marker + `" Lines="executed" /></Target></Project>`
+		root := gitFixture(t, map[string]string{"app.csproj": project, "Directory.Build.targets": `<Project><Target Name="TrapImported" BeforeTargets="Restore"><WriteLinesToFile File="` + marker + `" Lines="executed" /></Target></Project>`})
+		report := fixtureReport(t, root, "app.csproj", ManagerNuGet, "Newtonsoft.Json", "13.0.1", "13.0.3")
+		files, err := applyWithLockfiles(context.Background(), root, report, true, 3*time.Minute, integrationRunner{t: t})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertAppliedPaths(t, files, "app.csproj", "packages.lock.json")
+		assertFile(t, root, "packages.lock.json", "13.0.3")
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatal("NuGet executed repository MSBuild targets")
+		}
+	})
 }

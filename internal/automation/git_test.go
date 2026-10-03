@@ -130,3 +130,39 @@ func TestGitPushRequiresAbsentBranchOnFirstPublication(t *testing.T) {
 		t.Fatal("existing branch overwritten without lease")
 	}
 }
+
+func TestGitDeletionLeasePreservesConcurrentChanges(t *testing.T) {
+	root := gitRepository(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGitTest(t, root, "init", "--bare", remote)
+	runGitTest(t, root, "remote", "set-url", "origin", remote)
+	vcs := gitVCS{}
+	first, err := vcs.Head(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.Push(context.Background(), root, "bot/updates", ""); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "expected.txt", "human change\n")
+	next, _, err := vcs.Commit(context.Background(), root, "chore: change", "Human", "human@example.com", []update.AppliedFile{{Path: "expected.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.Push(context.Background(), root, "bot/updates", first); err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.DeleteBranch(context.Background(), root, "bot/updates", first); err == nil {
+		t.Fatal("stale deletion removed concurrent commit")
+	}
+	command := exec.Command("git", "--git-dir", remote, "rev-parse", "refs/heads/bot/updates")
+	if output, err := command.Output(); err != nil || strings.TrimSpace(string(output)) != next {
+		t.Fatalf("human branch lost: %s %v", output, err)
+	}
+	if err := vcs.DeleteBranch(context.Background(), root, "bot/updates", next); err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.DeleteBranch(context.Background(), root, "bot/updates", ""); err == nil {
+		t.Fatal("absence lease accepted for deletion")
+	}
+}

@@ -73,6 +73,43 @@ jobs:
       - name: Check root aliases and lockfile transactions
         run: go test ./internal/update -run 'Test(RepositoryRoot|ApplyWithLockfiles|LockfilesIgnoreInherited)' -count=1
 
+  windows:
+    name: Windows native tests
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Test native code and transactions
+        run: go test ./cmd/... ./internal/... -count=1
+      - name: Build and run CLI
+        run: |
+          go build -o hooneedsupdates.exe ./cmd/hooneedsupdates
+          ./hooneedsupdates.exe version
+          ./hooneedsupdates.exe apply --help
+
+  minimum-go:
+    name: Minimum Go version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - name: Test with minimum supported Go
+        run: go test ./cmd/... ./internal/... -count=1
+        env:
+          GOTOOLCHAIN: local
+
   policy:
     name: Hoostack policy
     runs-on: ubuntu-latest

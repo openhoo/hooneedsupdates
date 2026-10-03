@@ -118,6 +118,14 @@ func (g gitVCS) Push(ctx context.Context, root, branch, expectedRemoteSHA string
 	return err
 }
 
+func (g gitVCS) DeleteBranch(ctx context.Context, root, branch, expectedSHA string) error {
+	if len(expectedSHA) != 40 {
+		return errors.New("branch deletion requires an observed commit SHA")
+	}
+	_, err := g.runRepository(ctx, root, nil, "push", "--force-with-lease=refs/heads/"+branch+":"+expectedSHA, "origin", ":refs/heads/"+branch)
+	return err
+}
+
 func (g gitVCS) runRepository(ctx context.Context, root string, extra map[string]string, arguments ...string) ([]byte, error) {
 	remoteOutput, err := g.run(ctx, root, nil, nil, "remote", "get-url", "origin")
 	if err != nil && !(len(arguments) >= 2 && arguments[0] == "remote" && arguments[1] == "get-url") {

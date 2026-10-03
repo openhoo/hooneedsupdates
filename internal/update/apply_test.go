@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestApplyIsPreviewFirstAndUpdatesActionComment(t *testing.T) {
 		t.Fatalf("unexpected written content: %s", written)
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0o640 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 		t.Fatalf("mode changed to %o", info.Mode().Perm())
 	}
 }

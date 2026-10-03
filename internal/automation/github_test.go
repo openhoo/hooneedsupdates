@@ -2,6 +2,8 @@ package automation
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -104,5 +106,38 @@ func jsonResponse(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestGitHubPullsPaginatesAndRejectsPartialHistory(t *testing.T) {
+	for _, limit := range []bool{false, true} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			calls := 0
+			transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.URL.Query().Get("page") != fmt.Sprint(calls) || request.URL.Query().Get("head") != "openhoo:bot/updates" {
+					t.Fatalf("pagination query %s", request.URL.RawQuery)
+				}
+				batch := make([]pullRequest, 100)
+				if !limit && calls == 2 {
+					batch = batch[:1]
+					batch[0].Number = 101
+				}
+				body, _ := json.Marshal(batch)
+				return jsonResponse(http.StatusOK, string(body)), nil
+			})
+			host, err := newGitHubHost(&http.Client{Transport: transport}, "https://api.github.test", "", "token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pulls, err := host.Pulls(context.Background(), "openhoo/tool", "openhoo", "bot/updates", "main")
+			if limit {
+				if err == nil || pulls != nil || calls != 100 {
+					t.Fatalf("partial history accepted %d %v", calls, err)
+				}
+			} else if err != nil || len(pulls) != 101 || pulls[100].Number != 101 {
+				t.Fatalf("history incomplete: %d %v", len(pulls), err)
+			}
+		})
 	}
 }

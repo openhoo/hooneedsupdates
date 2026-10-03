@@ -82,7 +82,6 @@ type host interface {
 	CreatePull(context.Context, string, string, string, string, string, bool) (pullRequest, error)
 	UpdatePull(context.Context, string, int, string, string, string) (pullRequest, error)
 	ClosePull(context.Context, string, int) error
-	DeleteRef(context.Context, string, string) error
 	AddLabels(context.Context, string, int, []string) error
 	EnableAutoMerge(context.Context, string, string) error
 	DisableAutoMerge(context.Context, string) error
@@ -93,6 +92,7 @@ type vcs interface {
 	Head(context.Context, string) (string, error)
 	Commit(context.Context, string, string, string, string, []update.AppliedFile) (string, []string, error)
 	Push(context.Context, string, string, string) error
+	DeleteBranch(context.Context, string, string, string) error
 }
 
 type Runner struct {

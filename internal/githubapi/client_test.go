@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -138,7 +139,7 @@ func TestClientPersistsSecondaryCooldownAndResumesLater(t *testing.T) {
 		limited.RetryAt != now.Add(time.Minute) {
 		t.Fatalf("rate limit=%+v", limited)
 	}
-	if info, err := os.Stat(stateFile); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(stateFile); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("state info=%v error=%v", info, err)
 	}
 

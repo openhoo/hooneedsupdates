@@ -27,6 +27,7 @@ type Config struct {
 	Version            int             `yaml:"version"`
 	Managers           []string        `yaml:"managers,omitempty"`
 	ExcludePaths       []string        `yaml:"excludePaths,omitempty"`
+	PackageRules       []PackageRule   `yaml:"packageRules,omitempty"`
 	Ignore             []IgnoreRule    `yaml:"ignore,omitempty"`
 	CustomManagers     []CustomManager `yaml:"customManagers,omitempty"`
 	AllowedUpdateTypes []string        `yaml:"allowedUpdateTypes,omitempty"`
@@ -199,6 +200,7 @@ func (c *Config) Validate() error {
 		c.validateRuntime,
 		c.validateUpdateTypes,
 		c.validateIgnoreRules,
+		c.validatePackageRules,
 		c.validateCustomManagers,
 		c.validateAutomation,
 	}
