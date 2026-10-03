@@ -45,6 +45,9 @@
 
 ### Maintenance
 
+- Update `golang.org/x/mod` to v0.41.0 and raise the minimum supported Go
+  version to 1.26.0; migrate minimum-version CI and contributor documentation.
+
 - Refresh workflow tool versions and immutable action revisions using two
   reproducible updater worktrees.
 - Add focused macOS filesystem regression CI and cancel superseded CI runs.

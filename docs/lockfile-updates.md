@@ -72,7 +72,7 @@ with Bun 1.4.2 and .NET SDK 10.0.401.
 
 The supported npm command requires npm 12.0.2 or newer for `--allow-git=none`.
 The CI matrix pins npm 12.0.2, Bun 1.3.14, .NET SDK 10.0.x, and Go 1.27.x; Cargo
-uses the runner's stable toolchain. The project itself is tested with Go 1.25.x.
+uses the runner's stable toolchain. The project itself is tested with Go 1.26.x.
 Older package managers with missing required flags fail before source writes;
 this qualification does not establish every older runtime/version combination.
 
